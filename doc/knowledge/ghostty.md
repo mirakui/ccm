@@ -12,9 +12,10 @@ tmux や Zellij のような外部マルチプレクサなしで window / tab / 
 3. [Split / Pane (分割ペイン)](#3-split--pane-分割ペイン)
 4. [Quick Terminal (ドロップダウンターミナル)](#4-quick-terminal-ドロップダウンターミナル)
 5. [キーバインドシステム](#5-キーバインドシステム)
-6. [tmux / Zellij との比較](#6-tmux--zellij-との比較)
-7. [実用的な設定例](#7-実用的な設定例)
-8. [参考リンク](#8-参考リンク)
+6. [CLI 制御の現状](#6-cli-制御の現状)
+7. [tmux / Zellij との機能比較](#7-tmux--zellij-との機能比較)
+8. [実用的な設定例](#8-実用的な設定例)
+9. [参考リンク](#9-参考リンク)
 
 ---
 
@@ -307,7 +308,109 @@ ghostty +list-actions
 
 ---
 
-## 6. tmux / Zellij との比較
+## 6. CLI 制御の現状
+
+### 概要
+
+Ghostty には `ghostty +<command>` 形式の CLI サブコマンドがいくつか存在するが、
+**タブ切替・ペイン操作・ウィンドウ制御などをプログラムから行う CLI / IPC API は現時点で存在しない。**
+
+`next_tab`, `goto_tab:<N>`, `new_split:right` などのアクションはすべて **キーバインド経由でのみ** 発火可能であり、
+tmux の `select-window -t` や Zellij の `zellij action go-to-tab` に相当するコマンドはない。
+
+### 利用可能な CLI サブコマンド
+
+```bash
+ghostty +list-keybinds          # 現在のキーバインド一覧
+ghostty +list-keybinds --default # デフォルトキーバインド一覧
+ghostty +list-actions           # 利用可能なキーバインドアクション一覧
+ghostty +list-themes            # 利用可能なテーマ一覧
+ghostty +list-fonts             # 利用可能なフォント一覧
+ghostty +list-colors            # 現在のカラーパレット
+ghostty +show-config            # 現在の設定を表示
+ghostty +validate-config        # 設定ファイルのバリデーション
+ghostty +crash-report           # 直近のクラッシュレポートを表示
+```
+
+これらはすべて **情報取得用** であり、実行中の Ghostty インスタンスを制御するものではない。
+
+### Scripting API / IPC の検討状況
+
+Ghostty の Scripting API は [Discussion #2353](https://github.com/ghostty-org/ghostty/discussions/2353) で議論されているが、未実装でタイムラインも未定。
+
+#### 検討中のアプローチ
+
+| アプローチ | 説明 | 状況 |
+|---|---|---|
+| **プラットフォーム固有 IPC** | macOS: AppleScript / App Intents、Linux: D-Bus | 優先度高だが未完成。D-Bus は部分的に実装あり |
+| **制御シーケンス (Control Sequences)** | Kitty protocol や tmux control mode のように、TUI アプリが Ghostty を直接制御 | セキュリティ設計が必要で停滞中 |
+| **Unix ドメインソケット** | クロスプラットフォームなテキストプロトコル (memcached/redis 風) | 初期案だがプラットフォーム固有 IPC 優先に方針転換 |
+
+メンテナ (mitchellh) はセキュリティ上の懸念 (悪意あるエスケープシーケンスの防止) と API スコープの管理を重視しており、
+統一的な API よりもプラットフォーム固有の狭いスコープで段階的に実装する方針を示している。
+
+### 関連する未解決の要望
+
+| Discussion | 内容 |
+|---|---|
+| [#2353](https://github.com/ghostty-org/ghostty/discussions/2353) | Scripting API 全般 |
+| [#3782](https://github.com/ghostty-org/ghostty/discussions/3782) | CLI からタブ/ウィンドウの一覧取得 (回答: #2353 が必要) |
+| [#4579](https://github.com/ghostty-org/ghostty/discussions/4579) | CLI から既存インスタンスに新規タブを開く |
+| [#2480](https://github.com/ghostty-org/ghostty/discussions/2480) | 起動時のスプリットレイアウト定義 |
+| [#5912](https://github.com/ghostty-org/ghostty/discussions/5912) | デフォルトスプリットレイアウト |
+| [#3358](https://github.com/ghostty-org/ghostty/discussions/3358) | セッションマネージャ |
+
+### 現時点でのワークアラウンド
+
+#### macOS: AppleScript による間接操作
+
+```applescript
+-- Ghostty のウィンドウにキーストロークを送信
+tell application "System Events"
+    tell process "Ghostty"
+        keystroke "t" using command down  -- Cmd+T で新規タブ
+        keystroke "2" using command down  -- Cmd+2 でタブ 2 に移動
+    end tell
+end tell
+```
+
+#### Linux: xdotool / ydotool によるキーシミュレーション
+
+```bash
+# xdotool でキーストロークを送信 (X11)
+xdotool key --window $(xdotool search --name "Ghostty") ctrl+shift+t
+
+# ydotool (Wayland)
+ydotool key ctrl+shift+t
+```
+
+#### 汎用: プロセスシグナル
+
+Ghostty はシグナルベースの制御は公式にはサポートしていないが、
+`SIGUSR1` でコンフィグのリロードが可能:
+
+```bash
+kill -SIGUSR1 $(pgrep ghostty)
+```
+
+### tmux / Zellij の CLI 制御との比較
+
+| 操作 | tmux | Zellij | Ghostty |
+|---|---|---|---|
+| タブ切替 | `tmux select-window -t N` | `zellij action go-to-tab N` | **不可** |
+| ペイン切替 | `tmux select-pane -t N` | `zellij action focus-next-pane` | **不可** |
+| 新規タブ | `tmux new-window` | `zellij action new-tab` | **不可** |
+| 新規スプリット | `tmux split-window` | `zellij action new-pane` | **不可** |
+| タブ一覧 | `tmux list-windows` | `zellij action query-tab-names` | **不可** |
+| レイアウト適用 | `tmux select-layout` | `zellij action dump-layout` | **不可** |
+| コマンド送信 | `tmux send-keys` | `zellij action write` | **不可** |
+
+CLI からの制御が必要なワークフロー (自動化スクリプト、セッション管理、IDE 連携など) では、
+引き続き tmux / Zellij が必須となる。
+
+---
+
+## 7. tmux / Zellij との機能比較
 
 ### Ghostty が提供する機能 (tmux/Zellij と重複)
 
@@ -348,7 +451,7 @@ ghostty +list-actions
 
 ---
 
-## 7. 実用的な設定例
+## 8. 実用的な設定例
 
 ### Vim スタイルのスプリットナビゲーション
 
@@ -405,7 +508,7 @@ keybind = cmd+zero=reset_font_size
 
 ---
 
-## 8. 参考リンク
+## 9. 参考リンク
 
 - [Ghostty 公式ドキュメント - Features](https://ghostty.org/docs/features)
 - [Ghostty キーバインドアクションリファレンス](https://ghostty.org/docs/config/keybind/reference)

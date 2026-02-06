@@ -13,6 +13,7 @@
 7. [環境変数](#7-環境変数)
 8. [Agent SDK（プログラマティックアクセス）](#8-agent-sdkプログラマティックアクセス)
 9. [既知の制限と回避策](#9-既知の制限と回避策)
+10. [Plan モード](#10-plan-モード)
 
 ---
 
@@ -424,6 +425,61 @@ for await (const message of query({
 
 ---
 
+## 10. Plan モード
+
+Claude Code にはコードベースを読み取り専用で分析し、実装計画を立てるための **Plan モード**がある。
+
+### Plan モードへの切り替え
+
+| 方法 | 説明 |
+|------|------|
+| `Shift+Tab` | セッション中にパーミッションモードを切り替え |
+| `claude --permission-mode plan` | Plan モードで起動 |
+| `claude --permission-mode plan -p "prompt"` | 非インタラクティブで Plan モード実行 |
+| `Ctrl+G` | Plan モード中にプランをテキストエディタで編集 |
+
+### Plan ファイルの保存場所
+
+デフォルトでは `~/.claude/plans/` に保存される。`plansDirectory` 設定でカスタマイズ可能。
+
+#### 設定ファイルの優先順位（高い順）
+
+1. **Managed**（システムレベルポリシー）
+2. **コマンドライン引数**
+3. **Local**: `.claude/settings.local.json`（git 管理外、個人設定）
+4. **Project**: `.claude/settings.json`（git 管理下、チーム共有）
+5. **User**: `~/.claude/settings.json`（全プロジェクト共通）
+
+#### 設定例
+
+ユーザーレベル（`~/.claude/settings.json`）:
+
+```json
+{
+  "plansDirectory": "~/Documents/claude-plans"
+}
+```
+
+プロジェクトレベル（`.claude/settings.json`）:
+
+```json
+{
+  "plansDirectory": "./project-plans"
+}
+```
+
+- `~` によるホームディレクトリ展開に対応
+- ディレクトリが存在しない場合は自動作成される
+
+### opusplan モデルエイリアス
+
+`opusplan` はプランニングと実行でモデルを使い分けるハイブリッドエイリアス:
+
+- **Plan モード**: Opus を使用（複雑な推論・アーキテクチャ判断）
+- **実行モード**: Sonnet に自動切り替え（コード生成の効率化）
+
+---
+
 ## 参考リンク
 
 - [CLI リファレンス](https://code.claude.com/docs/en/cli-reference)
@@ -433,4 +489,6 @@ for await (const message of query({
 - [Hooks リファレンス](https://code.claude.com/docs/en/hooks)
 - [MCP 統合](https://code.claude.com/docs/en/mcp)
 - [Agent SDK 概要](https://platform.claude.com/docs/en/agent-sdk/overview)
+- [ワークフロー（Plan モード）](https://code.claude.com/docs/en/common-workflows)
+- [設定リファレンス](https://code.claude.com/docs/en/settings)
 - [GitHub リポジトリ](https://github.com/anthropics/claude-code)
