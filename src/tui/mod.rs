@@ -50,9 +50,13 @@ fn run_event_loop(
 ) -> anyhow::Result<()> {
     let events = EventHandler::new(Duration::from_secs(config.tui.tick_interval_secs))?;
     let mut app = App::new(session_name, &config.wezterm.binary);
+    let mut last_area_width: u16 = 0;
 
     loop {
-        terminal.draw(|f| ui::draw(f, &app))?;
+        terminal.draw(|f| {
+            last_area_width = f.area().width;
+            ui::draw(f, &app);
+        })?;
 
         match events.next()? {
             Event::Key(key) => {
@@ -89,7 +93,7 @@ fn run_event_loop(
             }
             Event::Mouse(mouse) => {
                 if let MouseEventKind::Down(_) = mouse.kind {
-                    app.select_by_click(mouse.row);
+                    app.select_by_click(mouse.row, last_area_width);
                 }
             }
             Event::Resize => {}

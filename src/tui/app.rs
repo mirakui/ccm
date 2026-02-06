@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::error::CcmError;
 use crate::session::Session;
 use crate::state::{self, State};
@@ -12,6 +14,7 @@ pub struct App {
     pub last_version: u64,
     pub own_session: String,
     pub status_message: Option<String>,
+    pub pane_titles: HashMap<u64, String>,
     wezterm_binary: String,
 }
 
@@ -26,6 +29,7 @@ impl App {
             last_version: 0,
             own_session: session_name.to_string(),
             status_message: None,
+            pane_titles: HashMap::new(),
             wezterm_binary: wezterm_binary.to_string(),
         };
         app.refresh_state();
@@ -66,6 +70,22 @@ impl App {
                 return;
             }
         };
+
+        // Build pane title map from live panes
+        let pane_title_map: HashMap<u64, &str> = live_panes
+            .iter()
+            .map(|p| (p.pane_id, p.title.as_str()))
+            .collect();
+
+        self.pane_titles.clear();
+        for session in &self.sessions {
+            if let Some(title) = pane_title_map.get(&session.claude_pane_id) {
+                if !title.is_empty() {
+                    self.pane_titles
+                        .insert(session.claude_pane_id, title.to_string());
+                }
+            }
+        }
 
         let live_pane_ids: std::collections::HashSet<u64> =
             live_panes.iter().map(|p| p.pane_id).collect();
@@ -192,13 +212,29 @@ impl App {
         Ok(())
     }
 
-    pub fn select_by_click(&mut self, row: u16) {
-        // row 0 = title, row 1 = separator, sessions start at row 2
-        if row >= 2 {
-            let index = (row - 2) as usize;
-            if index < self.sessions.len() {
-                self.selected_index = index;
+    pub fn select_by_click(&mut self, row: u16, area_width: u16) {
+        use super::ui::wrap_text;
+
+        let mut current_row: u16 = 2; // header + separator
+        let indent = 3u16;
+        let box_width = (area_width.saturating_sub(indent)) as usize;
+        let inner_width = box_width.saturating_sub(4); // "│ " + " │"
+
+        for (i, session) in self.sessions.iter().enumerate() {
+            let session_start = current_row;
+            current_row += 1; // session name line
+
+            if let Some(title) = self.pane_titles.get(&session.claude_pane_id) {
+                if !title.is_empty() && box_width > 4 {
+                    let content_lines = wrap_text(title, inner_width).len().max(1);
+                    current_row += (content_lines + 2) as u16; // top + content + bottom
+                }
+            }
+
+            if row >= session_start && row < current_row {
+                self.selected_index = i;
                 self.switch_to_selected();
+                return;
             }
         }
     }
