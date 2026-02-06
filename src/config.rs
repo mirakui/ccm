@@ -57,11 +57,52 @@ impl Default for TuiConfig {
     }
 }
 
-fn config_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|c| c.join("ccm").join("config.toml"))
+pub fn config_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".config").join("ccm").join("config.toml"))
 }
 
 impl Config {
+    pub fn exists() -> bool {
+        config_path().map_or(false, |p| p.exists())
+    }
+
+    pub fn default_toml() -> &'static str {
+        r#"# CCM Configuration
+
+[wezterm]
+# WezTerm binary path
+binary = "wezterm"
+# Command to send to the claude pane (newline is appended automatically)
+claude_command = "claude"
+
+[layout]
+# Tab-watcher pane width (%, 1-99)
+watcher_width = 20
+# Shell pane height (%, 1-99)
+shell_height = 30
+
+[tui]
+# Reconciliation interval in seconds (>= 1)
+tick_interval_secs = 3
+"#
+    }
+
+    pub fn init() -> anyhow::Result<PathBuf> {
+        let path = config_path()
+            .ok_or_else(|| anyhow::anyhow!("could not determine config directory"))?;
+
+        if path.exists() {
+            anyhow::bail!("config file already exists: {}", path.display());
+        }
+
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        fs::write(&path, Self::default_toml())?;
+        Ok(path)
+    }
+
     pub fn load() -> anyhow::Result<Self> {
         let path = match config_path() {
             Some(p) => p,
@@ -215,5 +256,28 @@ tick_interval_secs = 10
     fn validate_accepts_valid_config() {
         let config = Config::default();
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn init_default_toml_content() {
+        let toml_str = Config::default_toml();
+        let parsed: Config = toml::from_str(toml_str).expect("default_toml should be valid TOML");
+        let default = Config::default();
+        assert_eq!(parsed.wezterm.binary, default.wezterm.binary);
+        assert_eq!(parsed.wezterm.claude_command, default.wezterm.claude_command);
+        assert_eq!(parsed.layout.watcher_width, default.layout.watcher_width);
+        assert_eq!(parsed.layout.shell_height, default.layout.shell_height);
+        assert_eq!(
+            parsed.tui.tick_interval_secs,
+            default.tui.tick_interval_secs
+        );
+    }
+
+    #[test]
+    fn exists_returns_false_when_no_file() {
+        // config_path() points to a real OS path; if the user hasn't created it
+        // this test verifies exists() doesn't panic. We can't fully control the
+        // path in a unit test, but we can at least verify it returns a bool.
+        let _ = Config::exists();
     }
 }

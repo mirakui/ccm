@@ -18,8 +18,19 @@ use error::CcmError;
 use session::Session;
 
 fn main() -> Result<()> {
-    let config = Config::load().context("failed to load config")?;
     let cli = Cli::parse();
+
+    if let Command::Init = &cli.command {
+        let path = Config::init().context("failed to initialize config")?;
+        println!("Created config file: {}", path.display());
+        return Ok(());
+    }
+
+    let config = Config::load().context("failed to load config")?;
+
+    if !Config::exists() {
+        eprintln!("hint: no config file found. Run 'ccm init' to create ~/.config/ccm/config.toml");
+    }
 
     match cli.command {
         Command::New { name, cwd } => cmd_new(&config, &name, cwd)?,
@@ -27,6 +38,7 @@ fn main() -> Result<()> {
         Command::Switch { name } => cmd_switch(&config, &name)?,
         Command::Close { name } => cmd_close(&config, &name)?,
         Command::TabWatcher { session } => tui::run(&session, &config)?,
+        Command::Init => unreachable!(),
     }
 
     Ok(())

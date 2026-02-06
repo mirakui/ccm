@@ -29,6 +29,8 @@ pub enum Command {
         /// Session name
         name: String,
     },
+    /// Initialize config file with defaults
+    Init,
     /// Run the tab-watcher TUI sidebar (internal use)
     TabWatcher {
         /// Session name this watcher belongs to
