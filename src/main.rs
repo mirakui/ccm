@@ -1,6 +1,7 @@
 mod cli;
 mod config;
 mod error;
+mod gj;
 mod session;
 mod state;
 mod tui;
@@ -53,20 +54,30 @@ fn cmd_new(config: &Config, name: &str, cwd: Option<String>) -> Result<()> {
             .to_string(),
     };
 
+    // 1. Create git worktree via gj
+    let gj_output = gj::new_worktree(&cwd).context("failed to create git worktree")?;
+    let worktree_path = gj_output.worktree_path;
+    let branch = gj_output.branch;
+
     let binary = &config.wezterm.binary;
 
-    // 1. Spawn new tab (this becomes the claude pane)
-    let claude_pane_id =
-        wezterm::spawn_tab(binary, &cwd).context("failed to spawn new tab for session")?;
-
-    // Track created panes for cleanup on failure
-    let cleanup = |panes: &[u64]| {
+    // Helper: kill panes + clean up worktree on failure
+    let cleanup_panes = |binary: &str, panes: &[u64]| {
         for &pane_id in panes {
             let _ = wezterm::kill_pane(binary, pane_id);
         }
     };
 
-    // 2. Split left for tab-watcher
+    // 2. Spawn new tab in the worktree directory (this becomes the claude pane)
+    let claude_pane_id = match wezterm::spawn_tab(binary, &worktree_path) {
+        Ok(id) => id,
+        Err(e) => {
+            gj::exit_worktree(&worktree_path);
+            return Err(e).context("failed to spawn new tab for session");
+        }
+    };
+
+    // 3. Split left for tab-watcher
     let ccm_path = env::current_exe().context("failed to get ccm executable path")?;
     let ccm_str = ccm_path.to_string_lossy().to_string();
     let watcher_pane_id = match wezterm::split_pane(
@@ -78,12 +89,13 @@ fn cmd_new(config: &Config, name: &str, cwd: Option<String>) -> Result<()> {
     ) {
         Ok(id) => id,
         Err(e) => {
-            cleanup(&[claude_pane_id]);
+            cleanup_panes(binary, &[claude_pane_id]);
+            gj::exit_worktree(&worktree_path);
             return Err(e).context("failed to create tab-watcher pane");
         }
     };
 
-    // 3. Split bottom for shell
+    // 4. Split bottom for shell
     let shell_pane_id = match wezterm::split_pane(
         binary,
         claude_pane_id,
@@ -93,21 +105,22 @@ fn cmd_new(config: &Config, name: &str, cwd: Option<String>) -> Result<()> {
     ) {
         Ok(id) => id,
         Err(e) => {
-            cleanup(&[claude_pane_id, watcher_pane_id]);
+            cleanup_panes(binary, &[claude_pane_id, watcher_pane_id]);
+            gj::exit_worktree(&worktree_path);
             return Err(e).context("failed to create shell pane");
         }
     };
 
-    // 4. Send claude command to the claude pane
+    // 5. Send claude command to the claude pane
     let claude_cmd = format!("{}\n", config.wezterm.claude_command.trim_end_matches('\n'));
     wezterm::send_text(binary, claude_pane_id, &claude_cmd)
         .context("failed to send claude command to pane")?;
 
-    // 5. Set tab title
+    // 6. Set tab title
     wezterm::set_tab_title(binary, watcher_pane_id, name)
         .context("failed to set tab title")?;
 
-    // 6. Find the tab_id from wezterm list
+    // 7. Find the tab_id from wezterm list
     let panes = wezterm::list_panes(binary).context("failed to list panes")?;
     let tab_id = panes
         .iter()
@@ -115,14 +128,14 @@ fn cmd_new(config: &Config, name: &str, cwd: Option<String>) -> Result<()> {
         .map(|p| p.tab_id)
         .ok_or_else(|| anyhow::anyhow!("could not find tab_id for pane {claude_pane_id}"))?;
 
-    // 7. Save to state (duplicate check inside lock to avoid TOCTOU race)
+    // 8. Save to state (duplicate check inside lock to avoid TOCTOU race)
     let session = Session {
         name: name.to_string(),
         tab_id,
         watcher_pane_id,
         claude_pane_id,
         shell_pane_id,
-        cwd,
+        cwd: worktree_path,
         created_at: Utc::now(),
     };
 
@@ -136,11 +149,12 @@ fn cmd_new(config: &Config, name: &str, cwd: Option<String>) -> Result<()> {
     });
 
     if let Err(e) = result {
-        cleanup(&[watcher_pane_id, shell_pane_id, claude_pane_id]);
+        cleanup_panes(binary, &[watcher_pane_id, shell_pane_id, claude_pane_id]);
+        gj::exit_worktree(&session.cwd);
         return Err(e.into());
     }
 
-    println!("Created session '{name}' (tab {tab_id})");
+    println!("Created session '{name}' (tab {tab_id}, branch {branch})");
     Ok(())
 }
 
@@ -217,6 +231,9 @@ fn cmd_close(config: &Config, name: &str) -> Result<()> {
     let _ = wezterm::kill_pane(binary, session.watcher_pane_id);
     let _ = wezterm::kill_pane(binary, session.shell_pane_id);
     let _ = wezterm::kill_pane(binary, session.claude_pane_id);
+
+    // Clean up git worktree (best-effort)
+    gj::exit_worktree(&session.cwd);
 
     println!("Closed session '{name}'");
     Ok(())

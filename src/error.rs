@@ -11,6 +11,9 @@ pub enum CcmError {
     #[error("WezTerm CLI failed: {0}")]
     WezTerm(String),
 
+    #[error("gj CLI failed: {0}")]
+    Gj(String),
+
     #[error("State file error: {0}")]
     State(String),
 
