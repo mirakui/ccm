@@ -12,10 +12,12 @@ use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
+use crate::config::Config;
+
 use self::app::App;
 use self::event::{Event, EventHandler};
 
-pub fn run(session_name: &str) -> anyhow::Result<()> {
+pub fn run(session_name: &str, config: &Config) -> anyhow::Result<()> {
     terminal::enable_raw_mode()?;
     let mut stdout = io::stdout();
     crossterm::execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -23,7 +25,7 @@ pub fn run(session_name: &str) -> anyhow::Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run_event_loop(&mut terminal, session_name)
+        run_event_loop(&mut terminal, session_name, config)
     }));
 
     // Cleanup always runs, even on panic
@@ -44,9 +46,10 @@ pub fn run(session_name: &str) -> anyhow::Result<()> {
 fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session_name: &str,
+    config: &Config,
 ) -> anyhow::Result<()> {
-    let events = EventHandler::new(Duration::from_secs(3))?;
-    let mut app = App::new(session_name);
+    let events = EventHandler::new(Duration::from_secs(config.tui.tick_interval_secs))?;
+    let mut app = App::new(session_name, &config.wezterm.binary);
 
     loop {
         terminal.draw(|f| ui::draw(f, &app))?;

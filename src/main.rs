@@ -1,4 +1,5 @@
 mod cli;
+mod config;
 mod error;
 mod session;
 mod state;
@@ -12,24 +13,26 @@ use chrono::Utc;
 use clap::Parser;
 
 use cli::{Cli, Command};
+use config::Config;
 use error::CcmError;
 use session::Session;
 
 fn main() -> Result<()> {
+    let config = Config::load().context("failed to load config")?;
     let cli = Cli::parse();
 
     match cli.command {
-        Command::New { name, cwd } => cmd_new(&name, cwd)?,
-        Command::List => cmd_list()?,
-        Command::Switch { name } => cmd_switch(&name)?,
-        Command::Close { name } => cmd_close(&name)?,
-        Command::TabWatcher { session } => tui::run(&session)?,
+        Command::New { name, cwd } => cmd_new(&config, &name, cwd)?,
+        Command::List => cmd_list(&config)?,
+        Command::Switch { name } => cmd_switch(&config, &name)?,
+        Command::Close { name } => cmd_close(&config, &name)?,
+        Command::TabWatcher { session } => tui::run(&session, &config)?,
     }
 
     Ok(())
 }
 
-fn cmd_new(name: &str, cwd: Option<String>) -> Result<()> {
+fn cmd_new(config: &Config, name: &str, cwd: Option<String>) -> Result<()> {
     let cwd = match cwd {
         Some(p) => p,
         None => env::current_dir()
@@ -38,24 +41,27 @@ fn cmd_new(name: &str, cwd: Option<String>) -> Result<()> {
             .to_string(),
     };
 
+    let binary = &config.wezterm.binary;
+
     // 1. Spawn new tab (this becomes the claude pane)
     let claude_pane_id =
-        wezterm::spawn_tab(&cwd).context("failed to spawn new tab for session")?;
+        wezterm::spawn_tab(binary, &cwd).context("failed to spawn new tab for session")?;
 
     // Track created panes for cleanup on failure
     let cleanup = |panes: &[u64]| {
         for &pane_id in panes {
-            let _ = wezterm::kill_pane(pane_id);
+            let _ = wezterm::kill_pane(binary, pane_id);
         }
     };
 
-    // 2. Split left for tab-watcher (20%)
+    // 2. Split left for tab-watcher
     let ccm_path = env::current_exe().context("failed to get ccm executable path")?;
     let ccm_str = ccm_path.to_string_lossy().to_string();
     let watcher_pane_id = match wezterm::split_pane(
+        binary,
         claude_pane_id,
         wezterm::SplitDirection::Left,
-        20,
+        config.layout.watcher_width,
         Some(&[&ccm_str, "tab-watcher", "--session", name]),
     ) {
         Ok(id) => id,
@@ -65,11 +71,12 @@ fn cmd_new(name: &str, cwd: Option<String>) -> Result<()> {
         }
     };
 
-    // 3. Split bottom for shell (30%)
+    // 3. Split bottom for shell
     let shell_pane_id = match wezterm::split_pane(
+        binary,
         claude_pane_id,
         wezterm::SplitDirection::Bottom,
-        30,
+        config.layout.shell_height,
         None,
     ) {
         Ok(id) => id,
@@ -79,16 +86,17 @@ fn cmd_new(name: &str, cwd: Option<String>) -> Result<()> {
         }
     };
 
-    // 4. Send "claude\n" to the claude pane
-    wezterm::send_text(claude_pane_id, "claude\n")
+    // 4. Send claude command to the claude pane
+    let claude_cmd = format!("{}\n", config.wezterm.claude_command.trim_end_matches('\n'));
+    wezterm::send_text(binary, claude_pane_id, &claude_cmd)
         .context("failed to send claude command to pane")?;
 
     // 5. Set tab title
-    wezterm::set_tab_title(watcher_pane_id, name)
+    wezterm::set_tab_title(binary, watcher_pane_id, name)
         .context("failed to set tab title")?;
 
     // 6. Find the tab_id from wezterm list
-    let panes = wezterm::list_panes().context("failed to list panes")?;
+    let panes = wezterm::list_panes(binary).context("failed to list panes")?;
     let tab_id = panes
         .iter()
         .find(|p| p.pane_id == claude_pane_id)
@@ -124,9 +132,9 @@ fn cmd_new(name: &str, cwd: Option<String>) -> Result<()> {
     Ok(())
 }
 
-fn cmd_list() -> Result<()> {
+fn cmd_list(config: &Config) -> Result<()> {
     let state = state::load()?;
-    let live_panes = wezterm::list_panes().unwrap_or_default();
+    let live_panes = wezterm::list_panes(&config.wezterm.binary).unwrap_or_default();
     let live_pane_ids: std::collections::HashSet<u64> =
         live_panes.iter().map(|p| p.pane_id).collect();
 
@@ -152,7 +160,7 @@ fn cmd_list() -> Result<()> {
     Ok(())
 }
 
-fn cmd_switch(name: &str) -> Result<()> {
+fn cmd_switch(config: &Config, name: &str) -> Result<()> {
     // Read state under lock, validate session exists, update active, then activate tab
     let tab_id = state::update(|state| {
         if !state.sessions.iter().any(|s| s.name == name) {
@@ -167,33 +175,36 @@ fn cmd_switch(name: &str) -> Result<()> {
     .map(|s| s.tab_id)
     .expect("session was just validated to exist");
 
-    wezterm::activate_tab(tab_id).context("failed to activate tab")?;
+    wezterm::activate_tab(&config.wezterm.binary, tab_id).context("failed to activate tab")?;
 
     println!("Switched to '{name}'");
     Ok(())
 }
 
-fn cmd_close(name: &str) -> Result<()> {
-    let state = state::load()?;
-    let session = state
-        .sessions
-        .iter()
-        .find(|s| s.name == name)
-        .ok_or_else(|| CcmError::SessionNotFound(name.to_string()))?
-        .clone();
+fn cmd_close(config: &Config, name: &str) -> Result<()> {
+    let binary = &config.wezterm.binary;
 
-    // Kill all three panes (ignore errors for already-dead panes)
-    let _ = wezterm::kill_pane(session.watcher_pane_id);
-    let _ = wezterm::kill_pane(session.shell_pane_id);
-    let _ = wezterm::kill_pane(session.claude_pane_id);
-
+    // Look up session and remove from state atomically under lock
+    let mut removed_session = None;
     state::update(|state| {
-        state.sessions.retain(|s| s.name != name);
+        let idx = state
+            .sessions
+            .iter()
+            .position(|s| s.name == name)
+            .ok_or_else(|| CcmError::SessionNotFound(name.to_string()))?;
+        removed_session = Some(state.sessions.remove(idx));
         if state.active_session.as_deref() == Some(name) {
             state.active_session = None;
         }
         Ok(())
     })?;
+
+    let session = removed_session.expect("session was just removed in update closure");
+
+    // Kill all three panes (ignore errors for already-dead panes)
+    let _ = wezterm::kill_pane(binary, session.watcher_pane_id);
+    let _ = wezterm::kill_pane(binary, session.shell_pane_id);
+    let _ = wezterm::kill_pane(binary, session.claude_pane_id);
 
     println!("Closed session '{name}'");
     Ok(())

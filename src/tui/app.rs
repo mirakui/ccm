@@ -12,10 +12,11 @@ pub struct App {
     pub last_version: u64,
     pub own_session: String,
     pub status_message: Option<String>,
+    wezterm_binary: String,
 }
 
 impl App {
-    pub fn new(session_name: &str) -> Self {
+    pub fn new(session_name: &str, wezterm_binary: &str) -> Self {
         let mut app = Self {
             sessions: Vec::new(),
             active_session: None,
@@ -25,6 +26,7 @@ impl App {
             last_version: 0,
             own_session: session_name.to_string(),
             status_message: None,
+            wezterm_binary: wezterm_binary.to_string(),
         };
         app.refresh_state();
         app
@@ -57,7 +59,7 @@ impl App {
     /// Reconcile state with live WezTerm panes.
     /// Remove sessions whose panes no longer exist.
     pub fn reconcile(&mut self) {
-        let live_panes = match wezterm::list_panes() {
+        let live_panes = match wezterm::list_panes(&self.wezterm_binary) {
             Ok(p) => p,
             Err(e) => {
                 self.status_message = Some(format!("Reconcile error: {e}"));
@@ -123,7 +125,7 @@ impl App {
             let name = session.name.clone();
             let tab_id = session.tab_id;
 
-            if let Err(e) = wezterm::activate_tab(tab_id) {
+            if let Err(e) = wezterm::activate_tab(&self.wezterm_binary, tab_id) {
                 self.status_message = Some(format!("Switch error: {e}"));
                 return;
             }
@@ -164,25 +166,27 @@ impl App {
     }
 
     fn do_close_session(&mut self, name: &str) -> Result<(), CcmError> {
-        let session = self
-            .sessions
-            .iter()
-            .find(|s| s.name == name)
-            .ok_or_else(|| CcmError::SessionNotFound(name.to_string()))?
-            .clone();
-
-        // Kill panes (ignore errors for already-dead panes)
-        let _ = wezterm::kill_pane(session.watcher_pane_id);
-        let _ = wezterm::kill_pane(session.shell_pane_id);
-        let _ = wezterm::kill_pane(session.claude_pane_id);
-
+        // Look up session and remove from state atomically under lock
+        let mut removed_session = None;
         let new_state = state::update(|state| {
-            state.sessions.retain(|s| s.name != name);
+            let idx = state
+                .sessions
+                .iter()
+                .position(|s| s.name == name)
+                .ok_or_else(|| CcmError::SessionNotFound(name.to_string()))?;
+            removed_session = Some(state.sessions.remove(idx));
             if state.active_session.as_deref() == Some(name) {
                 state.active_session = None;
             }
             Ok(())
         })?;
+
+        let session = removed_session.expect("session was just removed in update closure");
+
+        // Kill panes (ignore errors for already-dead panes)
+        let _ = wezterm::kill_pane(&self.wezterm_binary, session.watcher_pane_id);
+        let _ = wezterm::kill_pane(&self.wezterm_binary, session.shell_pane_id);
+        let _ = wezterm::kill_pane(&self.wezterm_binary, session.claude_pane_id);
 
         self.apply_state(new_state);
         Ok(())

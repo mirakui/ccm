@@ -19,8 +19,8 @@ pub enum SplitDirection {
 }
 
 /// Spawn a new tab and return the pane_id of the initial pane.
-pub fn spawn_tab(cwd: &str) -> Result<u64, CcmError> {
-    let output = Command::new("wezterm")
+pub fn spawn_tab(binary: &str, cwd: &str) -> Result<u64, CcmError> {
+    let output = Command::new(binary)
         .args(["cli", "spawn", "--cwd", cwd])
         .output()
         .map_err(|e| CcmError::WezTerm(format!("failed to run wezterm cli spawn: {e}")))?;
@@ -40,6 +40,7 @@ pub fn spawn_tab(cwd: &str) -> Result<u64, CcmError> {
 /// Split a pane and return the new pane_id.
 /// If `program` is provided, it is run in the new pane.
 pub fn split_pane(
+    binary: &str,
     pane_id: u64,
     direction: SplitDirection,
     percent: u32,
@@ -67,7 +68,7 @@ pub fn split_pane(
         }
     }
 
-    let output = Command::new("wezterm")
+    let output = Command::new(binary)
         .args(&args)
         .output()
         .map_err(|e| CcmError::WezTerm(format!("failed to run wezterm cli split-pane: {e}")))?;
@@ -85,8 +86,8 @@ pub fn split_pane(
 }
 
 /// Activate a tab by its tab_id.
-pub fn activate_tab(tab_id: u64) -> Result<(), CcmError> {
-    let output = Command::new("wezterm")
+pub fn activate_tab(binary: &str, tab_id: u64) -> Result<(), CcmError> {
+    let output = Command::new(binary)
         .args(["cli", "activate-tab", "--tab-id", &tab_id.to_string()])
         .output()
         .map_err(|e| CcmError::WezTerm(format!("failed to run wezterm cli activate-tab: {e}")))?;
@@ -99,8 +100,8 @@ pub fn activate_tab(tab_id: u64) -> Result<(), CcmError> {
 }
 
 /// Set the tab title using a pane_id to identify the tab.
-pub fn set_tab_title(pane_id: u64, title: &str) -> Result<(), CcmError> {
-    let output = Command::new("wezterm")
+pub fn set_tab_title(binary: &str, pane_id: u64, title: &str) -> Result<(), CcmError> {
+    let output = Command::new(binary)
         .args([
             "cli",
             "set-tab-title",
@@ -123,8 +124,8 @@ pub fn set_tab_title(pane_id: u64, title: &str) -> Result<(), CcmError> {
 }
 
 /// Kill a pane by pane_id.
-pub fn kill_pane(pane_id: u64) -> Result<(), CcmError> {
-    let output = Command::new("wezterm")
+pub fn kill_pane(binary: &str, pane_id: u64) -> Result<(), CcmError> {
+    let output = Command::new(binary)
         .args(["cli", "kill-pane", "--pane-id", &pane_id.to_string()])
         .output()
         .map_err(|e| CcmError::WezTerm(format!("failed to run wezterm cli kill-pane: {e}")))?;
@@ -137,8 +138,8 @@ pub fn kill_pane(pane_id: u64) -> Result<(), CcmError> {
 }
 
 /// List all panes from WezTerm.
-pub fn list_panes() -> Result<Vec<PaneInfo>, CcmError> {
-    let output = Command::new("wezterm")
+pub fn list_panes(binary: &str) -> Result<Vec<PaneInfo>, CcmError> {
+    let output = Command::new(binary)
         .args(["cli", "list", "--format", "json"])
         .output()
         .map_err(|e| CcmError::WezTerm(format!("failed to run wezterm cli list: {e}")))?;
@@ -155,8 +156,8 @@ pub fn list_panes() -> Result<Vec<PaneInfo>, CcmError> {
 }
 
 /// Send text to a pane (with --no-paste to avoid bracketed paste).
-pub fn send_text(pane_id: u64, text: &str) -> Result<(), CcmError> {
-    let output = Command::new("wezterm")
+pub fn send_text(binary: &str, pane_id: u64, text: &str) -> Result<(), CcmError> {
+    let output = Command::new(binary)
         .args([
             "cli",
             "send-text",
