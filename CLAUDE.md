@@ -40,6 +40,11 @@ cargo run -- close <session-name>
 - TUI は catch_unwind でターミナル状態を必ず復元
 - notify の file watcher は state.json のみにフィルタリング（.lock/.tmp を無視）
 
+## コード品質
+
+- コード変更後は **code-reviewer** subagent でレビューを実施すること
+- CRITICAL および HIGH の指摘がゼロになるまで修正すること
+
 ## 設定ファイル
 
 `~/.config/ccm/config.toml`（任意、なくてもデフォルト値で動作）
