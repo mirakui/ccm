@@ -43,13 +43,21 @@ fn parse_new_output(bytes: &[u8]) -> Result<NewOutput, CcmError> {
         .map_err(|e| CcmError::Gj(format!("failed to parse gj new output: {e}")))
 }
 
-/// Run `gj exit --force` in the given worktree directory.
-/// Errors are silently ignored (best-effort cleanup).
-pub fn exit_worktree(worktree_path: &str) {
-    let _ = Command::new("gj")
-        .args(["exit", "--force"])
+/// Run `gj exit` in the given worktree directory.
+/// If `merge` is true, uses `--merge`; otherwise uses `--force`.
+pub fn exit_worktree(worktree_path: &str, merge: bool) -> Result<(), CcmError> {
+    let flag = if merge { "--merge" } else { "--force" };
+    let output = Command::new("gj")
+        .args(["exit", flag])
         .current_dir(worktree_path)
-        .output();
+        .output()
+        .map_err(|e| CcmError::Gj(format!("failed to run gj exit: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(CcmError::Gj(format!("gj exit {flag} failed: {stderr}")));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

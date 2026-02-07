@@ -41,7 +41,7 @@ fn main() -> Result<()> {
         }
         Command::List => cmd_list(&config)?,
         Command::Switch { name } => cmd_switch(&config, &name)?,
-        Command::Close { name } => cmd_close(&config, &name)?,
+        Command::Close { name, merge } => cmd_close(&config, name, merge)?,
         Command::Plan { cwd } => cmd_plan(&config, cwd)?,
         Command::TabWatcher { session } => tui::run(&session, &config)?,
         Command::Init => unreachable!(),
@@ -68,7 +68,7 @@ fn cmd_new(config: &Config, name: Option<String>, cwd: Option<String>) -> Result
 
     // Validate branch name is not empty
     if branch.is_empty() {
-        gj::exit_worktree(&worktree_path);
+        let _ = gj::exit_worktree(&worktree_path, false);
         return Err(anyhow::anyhow!("gj returned empty branch name"));
     }
 
@@ -88,7 +88,7 @@ fn cmd_new(config: &Config, name: Option<String>, cwd: Option<String>) -> Result
     let claude_pane_id = match wezterm::spawn_tab(binary, &worktree_path) {
         Ok(id) => id,
         Err(e) => {
-            gj::exit_worktree(&worktree_path);
+            let _ = gj::exit_worktree(&worktree_path, false);
             return Err(e).context("failed to spawn new tab for session");
         }
     };
@@ -106,7 +106,7 @@ fn cmd_new(config: &Config, name: Option<String>, cwd: Option<String>) -> Result
         Ok(id) => id,
         Err(e) => {
             cleanup_panes(binary, &[claude_pane_id]);
-            gj::exit_worktree(&worktree_path);
+            let _ = gj::exit_worktree(&worktree_path, false);
             return Err(e).context("failed to create tab-watcher pane");
         }
     };
@@ -122,7 +122,7 @@ fn cmd_new(config: &Config, name: Option<String>, cwd: Option<String>) -> Result
         Ok(id) => id,
         Err(e) => {
             cleanup_panes(binary, &[claude_pane_id, watcher_pane_id]);
-            gj::exit_worktree(&worktree_path);
+            let _ = gj::exit_worktree(&worktree_path, false);
             return Err(e).context("failed to create shell pane");
         }
     };
@@ -166,7 +166,7 @@ fn cmd_new(config: &Config, name: Option<String>, cwd: Option<String>) -> Result
 
     if let Err(e) = result {
         cleanup_panes(binary, &[watcher_pane_id, shell_pane_id, claude_pane_id]);
-        gj::exit_worktree(&session.cwd);
+        let _ = gj::exit_worktree(&session.cwd, false);
         return Err(e.into());
     }
 
@@ -367,10 +367,27 @@ fn cmd_plan(config: &Config, cwd: Option<String>) -> Result<()> {
     Ok(())
 }
 
-fn cmd_close(config: &Config, name: &str) -> Result<()> {
+fn cmd_close(config: &Config, name: Option<String>, merge: bool) -> Result<()> {
+    let name = match name {
+        Some(n) => n,
+        None => resolve_session_from_cwd()?,
+    };
     let binary = &config.wezterm.binary;
 
-    // Look up session and remove from state atomically under lock
+    // If merging, attempt merge BEFORE destroying session state.
+    // This way, on merge failure the session remains intact for the user to investigate.
+    if merge {
+        let state = state::load()?;
+        let session = state
+            .sessions
+            .iter()
+            .find(|s| s.name == name)
+            .ok_or_else(|| CcmError::SessionNotFound(name.to_string()))?;
+        gj::exit_worktree(&session.cwd, true)
+            .context("failed to merge and clean up worktree")?;
+    }
+
+    // Remove session from state atomically under lock
     let mut removed_session = None;
     state::update(|state| {
         let idx = state
@@ -379,7 +396,7 @@ fn cmd_close(config: &Config, name: &str) -> Result<()> {
             .position(|s| s.name == name)
             .ok_or_else(|| CcmError::SessionNotFound(name.to_string()))?;
         removed_session = Some(state.sessions.remove(idx));
-        if state.active_session.as_deref() == Some(name) {
+        if state.active_session.as_deref() == Some(&*name) {
             state.active_session = None;
         }
         Ok(())
@@ -392,8 +409,10 @@ fn cmd_close(config: &Config, name: &str) -> Result<()> {
     let _ = wezterm::kill_pane(binary, session.shell_pane_id);
     let _ = wezterm::kill_pane(binary, session.claude_pane_id);
 
-    // Clean up git worktree (best-effort)
-    gj::exit_worktree(&session.cwd);
+    // Clean up git worktree (best-effort for non-merge path)
+    if !merge {
+        let _ = gj::exit_worktree(&session.cwd, false);
+    }
 
     println!("Closed session '{name}'");
     Ok(())
@@ -497,5 +516,34 @@ mod tests {
     fn test_generate_name_all_special_first_line_falls_back() {
         let name = generate_session_name_from_plan("🚀🐛\n");
         assert!(name.starts_with("plan-"));
+    }
+}
+
+/// Resolve session name from the current working directory by matching against known sessions.
+/// Uses canonicalized paths and picks the longest (most specific) match.
+fn resolve_session_from_cwd() -> Result<String> {
+    let cwd = env::current_dir()
+        .context("failed to get current directory")?
+        .canonicalize()
+        .context("failed to canonicalize current directory")?;
+
+    let state = state::load()?;
+    let best = state
+        .sessions
+        .iter()
+        .filter(|s| {
+            std::path::Path::new(&s.cwd)
+                .canonicalize()
+                .map(|p| cwd.starts_with(&p))
+                .unwrap_or(false)
+        })
+        .max_by_key(|s| s.cwd.len());
+
+    match best {
+        Some(session) => Ok(session.name.clone()),
+        None => Err(anyhow::anyhow!(
+            "no session found for current directory '{}'. Specify a session name explicitly.",
+            cwd.display()
+        )),
     }
 }

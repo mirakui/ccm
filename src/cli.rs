@@ -24,10 +24,14 @@ pub enum Command {
         /// Session name
         name: String,
     },
-    /// Close a session
+    /// Close a session (alias: exit)
+    #[command(alias = "exit")]
     Close {
-        /// Session name
-        name: String,
+        /// Session name (optional - detects from current worktree if omitted)
+        name: Option<String>,
+        /// Merge the branch before closing (calls `gj exit --merge`)
+        #[arg(long)]
+        merge: bool,
     },
     /// Create a new session from a plan (opens editor)
     Plan {
