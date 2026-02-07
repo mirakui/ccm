@@ -232,8 +232,18 @@ fn cmd_list(config: &Config) -> Result<()> {
             || live_pane_ids.contains(&session.shell_pane_id);
         let status = if alive { "" } else { " [dead]" };
 
+        let claude_status = session
+            .claude_status
+            .as_deref()
+            .unwrap_or("");
+        let claude_info = if claude_status.is_empty() {
+            String::new()
+        } else {
+            format!(" [{claude_status}]")
+        };
+
         println!(
-            "  {}{active_mark}{status}  (tab:{}, cwd:{})",
+            "  {}{active_mark}{status}{claude_info}  (tab:{}, cwd:{})",
             session.name, session.tab_id, session.cwd
         );
     }

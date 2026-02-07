@@ -124,7 +124,12 @@ impl App {
 
         self.pane_titles.clear();
         for session in &self.sessions {
-            if let Some(title) = pane_title_map.get(&session.claude_pane_id) {
+            // claude_status from state.json takes precedence (real-time via PTY wrapper)
+            if let Some(ref status) = session.claude_status {
+                self.pane_titles
+                    .insert(session.claude_pane_id, status.clone());
+            } else if let Some(title) = pane_title_map.get(&session.claude_pane_id) {
+                // Fallback to WezTerm pane title
                 if !title.is_empty() {
                     self.pane_titles
                         .insert(session.claude_pane_id, title.to_string());
