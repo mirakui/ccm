@@ -16,6 +16,7 @@ pub struct App {
     pub status_message: Option<String>,
     pub pane_titles: HashMap<u64, String>,
     wezterm_binary: String,
+    manual_navigation: bool,
 }
 
 impl App {
@@ -31,6 +32,7 @@ impl App {
             status_message: None,
             pane_titles: HashMap::new(),
             wezterm_binary: wezterm_binary.to_string(),
+            manual_navigation: false,
         };
         app.refresh_state();
         app
@@ -54,9 +56,38 @@ impl App {
         self.last_version = state.version;
         self.sessions = state.sessions;
         self.active_session = state.active_session;
+
+        // 自動同期モードなら、selected_index をアクティブセッションに合わせる
+        if !self.manual_navigation {
+            self.sync_selected_to_active();
+        }
+
         // Clamp selected index
         if !self.sessions.is_empty() && self.selected_index >= self.sessions.len() {
             self.selected_index = self.sessions.len() - 1;
+        }
+    }
+
+    /// selected_index をアクティブセッションの位置に同期する。
+    /// 自動同期モード（manual_navigation = false）のときに呼ばれる。
+    fn sync_selected_to_active(&mut self) {
+        if self.sessions.is_empty() {
+            self.selected_index = 0;
+            return;
+        }
+
+        if let Some(ref active_name) = self.active_session {
+            // アクティブセッションの位置を検索
+            if let Some(pos) = self.sessions.iter().position(|s| &s.name == active_name) {
+                self.selected_index = pos;
+                return;
+            }
+        }
+
+        // フォールバック: active_session が None または見つからない場合
+        // 現在の index が有効ならそのまま、無効なら 0 にリセット
+        if self.selected_index >= self.sessions.len() {
+            self.selected_index = 0;
         }
     }
 
@@ -127,6 +158,7 @@ impl App {
     pub fn move_down(&mut self) {
         if !self.sessions.is_empty() {
             self.selected_index = (self.selected_index + 1) % self.sessions.len();
+            self.manual_navigation = true;
         }
     }
 
@@ -137,6 +169,7 @@ impl App {
             } else {
                 self.selected_index -= 1;
             }
+            self.manual_navigation = true;
         }
     }
 
@@ -154,7 +187,10 @@ impl App {
                 state.active_session = Some(name.clone());
                 Ok(())
             }) {
-                Ok(new_state) => self.apply_state(new_state),
+                Ok(new_state) => {
+                    self.manual_navigation = false;
+                    self.apply_state(new_state);
+                }
                 Err(e) => {
                     self.status_message = Some(format!("State update error: {e}"));
                 }
@@ -233,6 +269,7 @@ impl App {
 
             if row >= session_start && row < current_row {
                 self.selected_index = i;
+                self.manual_navigation = false;
                 self.switch_to_selected();
                 return;
             }
