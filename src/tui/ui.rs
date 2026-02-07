@@ -5,7 +5,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
-use super::app::App;
+use super::app::{App, ConfirmAction};
 
 /// Wrap text to fit within the given display width (in terminal columns).
 /// Handles multi-byte UTF-8 and wide characters (CJK, emoji) correctly.
@@ -165,11 +165,17 @@ pub fn draw(f: &mut Frame, app: &App) {
         }
     }
 
-    // Confirm delete overlay
-    if let Some(ref name) = app.confirm_delete {
+    // Confirm action overlay
+    if let Some(ref action) = app.confirm_action {
+        let msg = match action {
+            ConfirmAction::Close(name) => format!(" Close '{name}'? [y/n]"),
+            ConfirmAction::CloseWithMerge(name) => {
+                format!(" Close '{name}' with merge? [y/n]")
+            }
+        };
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            format!(" Delete '{name}'? [y/n]"),
+            msg,
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         )));
     }
@@ -192,8 +198,10 @@ pub fn draw(f: &mut Frame, app: &App) {
         Span::styled(" nav ", Style::default().fg(Color::DarkGray)),
         Span::styled("Enter", Style::default().fg(Color::Yellow)),
         Span::styled(" switch ", Style::default().fg(Color::DarkGray)),
-        Span::styled("d", Style::default().fg(Color::Yellow)),
-        Span::styled(" del ", Style::default().fg(Color::DarkGray)),
+        Span::styled("c", Style::default().fg(Color::Yellow)),
+        Span::styled(" close ", Style::default().fg(Color::DarkGray)),
+        Span::styled("m", Style::default().fg(Color::Yellow)),
+        Span::styled(" merge ", Style::default().fg(Color::DarkGray)),
         Span::styled("q", Style::default().fg(Color::Yellow)),
         Span::styled(" quit", Style::default().fg(Color::DarkGray)),
     ]);

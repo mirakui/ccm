@@ -64,11 +64,14 @@ fn run_event_loop(
                     continue;
                 }
 
-                // If in confirm-delete mode, handle y/n
-                if app.confirm_delete.is_some() {
+                // Clear status from previous key press
+                app.status_message = None;
+
+                // If in confirm-action mode, handle y/n
+                if app.confirm_action.is_some() {
                     match key.code {
-                        KeyCode::Char('y') | KeyCode::Char('Y') => app.confirm_delete_yes(),
-                        _ => app.confirm_delete_no(),
+                        KeyCode::Char('y') | KeyCode::Char('Y') => app.confirm_action_yes(),
+                        _ => app.confirm_action_no(),
                     }
                     continue;
                 }
@@ -80,16 +83,14 @@ fn run_event_loop(
                     KeyCode::Char('j') | KeyCode::Down => app.move_down(),
                     KeyCode::Char('k') | KeyCode::Up => app.move_up(),
                     KeyCode::Enter => app.switch_to_selected(),
-                    KeyCode::Char('d') => app.request_delete(),
+                    KeyCode::Char('c') => app.request_close(),
+                    KeyCode::Char('m') => app.request_close_with_merge(),
                     KeyCode::Char('r') => {
                         app.reconcile();
                         app.refresh_state();
                     }
                     _ => {}
                 }
-
-                // Clear status on any key press
-                app.status_message = None;
             }
             Event::Mouse(mouse) => {
                 if let MouseEventKind::Down(_) = mouse.kind {

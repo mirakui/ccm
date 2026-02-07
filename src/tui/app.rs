@@ -1,16 +1,22 @@
 use std::collections::HashMap;
 
 use crate::error::CcmError;
+use crate::gj;
 use crate::session::Session;
 use crate::state::{self, State};
 use crate::wezterm;
+
+pub enum ConfirmAction {
+    Close(String),
+    CloseWithMerge(String),
+}
 
 pub struct App {
     pub sessions: Vec<Session>,
     pub active_session: Option<String>,
     pub selected_index: usize,
     pub should_quit: bool,
-    pub confirm_delete: Option<String>,
+    pub confirm_action: Option<ConfirmAction>,
     pub last_version: u64,
     pub own_session: String,
     pub status_message: Option<String>,
@@ -26,7 +32,7 @@ impl App {
             active_session: None,
             selected_index: 0,
             should_quit: false,
-            confirm_delete: None,
+            confirm_action: None,
             last_version: 0,
             own_session: session_name.to_string(),
             status_message: None,
@@ -198,31 +204,53 @@ impl App {
         }
     }
 
-    pub fn request_delete(&mut self) {
+    pub fn request_close(&mut self) {
         if let Some(session) = self.sessions.get(self.selected_index) {
-            // Don't allow deleting our own session from the watcher
-            if session.name == self.own_session {
-                self.status_message = Some("Cannot delete own session from watcher".to_string());
+            self.confirm_action = Some(ConfirmAction::Close(session.name.clone()));
+        }
+    }
+
+    pub fn request_close_with_merge(&mut self) {
+        if let Some(session) = self.sessions.get(self.selected_index) {
+            self.confirm_action = Some(ConfirmAction::CloseWithMerge(session.name.clone()));
+        }
+    }
+
+    pub fn confirm_action_yes(&mut self) {
+        if let Some(action) = self.confirm_action.take() {
+            let (name, merge) = match action {
+                ConfirmAction::Close(name) => (name, false),
+                ConfirmAction::CloseWithMerge(name) => (name, true),
+            };
+            let is_own = name == self.own_session;
+            if let Err(e) = self.do_close_session(&name, merge) {
+                self.status_message = Some(format!("Close error: {e}"));
                 return;
             }
-            self.confirm_delete = Some(session.name.clone());
-        }
-    }
-
-    pub fn confirm_delete_yes(&mut self) {
-        if let Some(name) = self.confirm_delete.take() {
-            if let Err(e) = self.do_close_session(&name) {
-                self.status_message = Some(format!("Delete error: {e}"));
+            if is_own {
+                self.should_quit = true;
             }
         }
     }
 
-    pub fn confirm_delete_no(&mut self) {
-        self.confirm_delete = None;
+    pub fn confirm_action_no(&mut self) {
+        self.confirm_action = None;
     }
 
-    fn do_close_session(&mut self, name: &str) -> Result<(), CcmError> {
-        // Look up session and remove from state atomically under lock
+    fn do_close_session(&mut self, name: &str, merge: bool) -> Result<(), CcmError> {
+        // If merging, attempt merge BEFORE destroying session state.
+        // On merge failure the session remains intact for the user to investigate.
+        if merge {
+            let state = state::load()?;
+            let session = state
+                .sessions
+                .iter()
+                .find(|s| s.name == name)
+                .ok_or_else(|| CcmError::SessionNotFound(name.to_string()))?;
+            gj::exit_worktree(&session.cwd, true)?;
+        }
+
+        // Remove session from state atomically under lock
         let mut removed_session = None;
         let new_state = state::update(|state| {
             let idx = state
@@ -240,9 +268,15 @@ impl App {
         let session = removed_session.expect("session was just removed in update closure");
 
         // Kill panes (ignore errors for already-dead panes)
-        let _ = wezterm::kill_pane(&self.wezterm_binary, session.watcher_pane_id);
+        // Kill watcher pane last so that own-session close completes shell/claude kills first
         let _ = wezterm::kill_pane(&self.wezterm_binary, session.shell_pane_id);
         let _ = wezterm::kill_pane(&self.wezterm_binary, session.claude_pane_id);
+        let _ = wezterm::kill_pane(&self.wezterm_binary, session.watcher_pane_id);
+
+        // Clean up git worktree (best-effort for non-merge path)
+        if !merge {
+            let _ = gj::exit_worktree(&session.cwd, false);
+        }
 
         self.apply_state(new_state);
         Ok(())
