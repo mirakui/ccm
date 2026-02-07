@@ -154,6 +154,12 @@ fn cmd_new(config: &Config, name: &str, cwd: Option<String>) -> Result<()> {
         return Err(e.into());
     }
 
+    // Activate claude pane so user can immediately interact with Claude Code
+    // This is best-effort; if it fails, the session is still functional
+    if let Err(e) = wezterm::activate_pane(binary, claude_pane_id) {
+        eprintln!("Warning: failed to activate claude pane: {e}");
+    }
+
     println!("Created session '{name}' (tab {tab_id}, branch {branch})");
     Ok(())
 }

@@ -99,6 +99,20 @@ pub fn activate_tab(binary: &str, tab_id: u64) -> Result<(), CcmError> {
     Ok(())
 }
 
+/// Activate a pane by its pane_id.
+pub fn activate_pane(binary: &str, pane_id: u64) -> Result<(), CcmError> {
+    let output = Command::new(binary)
+        .args(["cli", "activate-pane", "--pane-id", &pane_id.to_string()])
+        .output()
+        .map_err(|e| CcmError::WezTerm(format!("failed to run wezterm cli activate-pane: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(CcmError::WezTerm(format!("activate-pane failed: {stderr}")));
+    }
+    Ok(())
+}
+
 /// Set the tab title using a pane_id to identify the tab.
 pub fn set_tab_title(binary: &str, pane_id: u64, title: &str) -> Result<(), CcmError> {
     let output = Command::new(binary)
