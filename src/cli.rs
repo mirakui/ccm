@@ -47,4 +47,13 @@ pub enum Command {
         #[arg(long)]
         session: String,
     },
+    /// Wrap a command in a PTY, intercepting OSC 0 title changes (internal)
+    Wrap {
+        /// Session name to update status for
+        #[arg(long)]
+        session: String,
+        /// Command and arguments to run
+        #[arg(trailing_var_arg = true, required = true)]
+        command: Vec<String>,
+    },
 }

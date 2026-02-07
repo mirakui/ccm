@@ -2,6 +2,7 @@ mod cli;
 mod config;
 mod error;
 mod gj;
+mod pty_wrap;
 mod session;
 mod state;
 mod tui;
@@ -45,6 +46,10 @@ fn main() -> Result<()> {
         Command::Close { name, merge } => cmd_close(&config, name, merge)?,
         Command::Plan { cwd } => cmd_plan(&config, cwd)?,
         Command::TabWatcher { session } => tui::run(&session, &config)?,
+        Command::Wrap { session, command } => {
+            let exit_code = pty_wrap::run_wrap(&session, &command)?;
+            std::process::exit(exit_code);
+        }
         Command::Init => unreachable!(),
     }
 
@@ -141,10 +146,16 @@ fn cmd_new(
         }
     };
 
-    // 5. Send claude command to the claude pane (if provided)
+    // 5. Send claude command to the claude pane (via PTY wrapper for OSC 0 detection)
     if let Some(cmd) = &claude_command {
-        let claude_cmd = format!("{}\n", cmd.trim_end_matches('\n'));
-        wezterm::send_text(binary, claude_pane_id, &claude_cmd)
+        let quoted_session = session_name.replace('\'', "'\\''");
+        let wrapped_cmd = format!(
+            "{} wrap --session '{}' -- {}\n",
+            ccm_str,
+            quoted_session,
+            cmd.trim_end_matches('\n')
+        );
+        wezterm::send_text(binary, claude_pane_id, &wrapped_cmd)
             .context("failed to send claude command to pane")?;
     }
 
@@ -169,6 +180,7 @@ fn cmd_new(
         shell_pane_id,
         cwd: worktree_path,
         created_at: Utc::now(),
+        claude_status: None,
     };
 
     let result = state::update(|state| {
@@ -381,8 +393,13 @@ fn cmd_plan(config: &Config, cwd: Option<String>) -> Result<()> {
     save_plan_to_worktree(&info.worktree_path, &plan_content)
         .context("failed to save plan to worktree")?;
 
+    let ccm_path = env::current_exe().context("failed to get ccm executable path")?;
+    let ccm_str = ccm_path.to_string_lossy().to_string();
+    let quoted_session = info.session_name.replace('\'', "'\\''");
     let claude_cmd = format!(
-        "{} --permission-mode=plan < .cctmp/plan.md\n",
+        "{} wrap --session '{}' -- {} --permission-mode=plan < .cctmp/plan.md\n",
+        ccm_str,
+        quoted_session,
         config.wezterm.claude_command.trim_end_matches('\n')
     );
     wezterm::send_text(&config.wezterm.binary, info.claude_pane_id, &claude_cmd)

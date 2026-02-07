@@ -10,4 +10,6 @@ pub struct Session {
     pub shell_pane_id: u64,
     pub cwd: String,
     pub created_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_status: Option<String>,
 }

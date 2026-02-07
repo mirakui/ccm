@@ -63,6 +63,14 @@ impl App {
         self.sessions = state.sessions;
         self.active_session = state.active_session;
 
+        // Reflect claude_status from state into pane_titles (overrides WezTerm polling)
+        for session in &self.sessions {
+            if let Some(ref status) = session.claude_status {
+                self.pane_titles
+                    .insert(session.claude_pane_id, status.clone());
+            }
+        }
+
         // 自動同期モードなら、selected_index をアクティブセッションに合わせる
         if !self.manual_navigation {
             self.sync_selected_to_active();
