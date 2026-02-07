@@ -34,7 +34,7 @@ fn main() -> Result<()> {
     }
 
     match cli.command {
-        Command::New { name, cwd } => cmd_new(&config, &name, cwd)?,
+        Command::New { name, cwd } => cmd_new(&config, name, cwd)?,
         Command::List => cmd_list(&config)?,
         Command::Switch { name } => cmd_switch(&config, &name)?,
         Command::Close { name } => cmd_close(&config, &name)?,
@@ -45,7 +45,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn cmd_new(config: &Config, name: &str, cwd: Option<String>) -> Result<()> {
+fn cmd_new(config: &Config, name: Option<String>, cwd: Option<String>) -> Result<()> {
     let cwd = match cwd {
         Some(p) => p,
         None => env::current_dir()
@@ -55,9 +55,19 @@ fn cmd_new(config: &Config, name: &str, cwd: Option<String>) -> Result<()> {
     };
 
     // 1. Create git worktree via gj
-    let gj_output = gj::new_worktree(&cwd).context("failed to create git worktree")?;
+    let gj_output = gj::new_worktree(&cwd, name.as_deref())
+        .context("failed to create git worktree")?;
     let worktree_path = gj_output.worktree_path;
     let branch = gj_output.branch;
+
+    // Validate branch name is not empty
+    if branch.is_empty() {
+        gj::exit_worktree(&worktree_path);
+        return Err(anyhow::anyhow!("gj returned empty branch name"));
+    }
+
+    // session-name is always the same as branch name
+    let session_name = branch.clone();
 
     let binary = &config.wezterm.binary;
 
@@ -85,7 +95,7 @@ fn cmd_new(config: &Config, name: &str, cwd: Option<String>) -> Result<()> {
         claude_pane_id,
         wezterm::SplitDirection::Left,
         config.layout.watcher_width,
-        Some(&[&ccm_str, "tab-watcher", "--session", name]),
+        Some(&[&ccm_str, "tab-watcher", "--session", &session_name]),
     ) {
         Ok(id) => id,
         Err(e) => {
@@ -117,7 +127,7 @@ fn cmd_new(config: &Config, name: &str, cwd: Option<String>) -> Result<()> {
         .context("failed to send claude command to pane")?;
 
     // 6. Set tab title
-    wezterm::set_tab_title(binary, watcher_pane_id, name)
+    wezterm::set_tab_title(binary, watcher_pane_id, &session_name)
         .context("failed to set tab title")?;
 
     // 7. Find the tab_id from wezterm list
@@ -130,7 +140,7 @@ fn cmd_new(config: &Config, name: &str, cwd: Option<String>) -> Result<()> {
 
     // 8. Save to state (duplicate check inside lock to avoid TOCTOU race)
     let session = Session {
-        name: name.to_string(),
+        name: session_name.clone(),
         tab_id,
         watcher_pane_id,
         claude_pane_id,
@@ -140,10 +150,10 @@ fn cmd_new(config: &Config, name: &str, cwd: Option<String>) -> Result<()> {
     };
 
     let result = state::update(|state| {
-        if state.sessions.iter().any(|s| s.name == name) {
-            return Err(CcmError::SessionExists(name.to_string()));
+        if state.sessions.iter().any(|s| s.name == session_name) {
+            return Err(CcmError::SessionExists(session_name.clone()));
         }
-        state.active_session = Some(name.to_string());
+        state.active_session = Some(session_name.clone());
         state.sessions.push(session.clone());
         Ok(())
     });
@@ -160,7 +170,7 @@ fn cmd_new(config: &Config, name: &str, cwd: Option<String>) -> Result<()> {
         eprintln!("Warning: failed to activate claude pane: {e}");
     }
 
-    println!("Created session '{name}' (tab {tab_id}, branch {branch})");
+    println!("Created session '{session_name}' (tab {tab_id}, branch {branch})");
     Ok(())
 }
 

@@ -11,8 +11,8 @@ pub struct Cli {
 pub enum Command {
     /// Create a new session (tab + 3-pane layout)
     New {
-        /// Session name (must be unique)
-        name: String,
+        /// Session name (optional - will use git branch name if not provided)
+        name: Option<String>,
         /// Working directory (defaults to current directory)
         #[arg(long)]
         cwd: Option<String>,

@@ -10,12 +10,23 @@ pub struct NewOutput {
     pub branch: String,
 }
 
-/// Run `gj new --random-suffix --output=json` in the given directory
-/// and return the parsed worktree information.
-pub fn new_worktree(cwd: &str) -> Result<NewOutput, CcmError> {
-    let output = Command::new("gj")
-        .args(["new", "--random-suffix", "--output=json"])
-        .current_dir(cwd)
+/// Run `gj new [branch-suffix] --output=json` in the given directory.
+/// If branch_suffix is None, uses `--random-suffix` instead.
+/// Returns the parsed worktree information.
+pub fn new_worktree(cwd: &str, branch_suffix: Option<&str>) -> Result<NewOutput, CcmError> {
+    let mut cmd = Command::new("gj");
+    cmd.arg("new");
+
+    if let Some(suffix) = branch_suffix {
+        cmd.arg(suffix);
+    } else {
+        cmd.arg("--random-suffix");
+    }
+
+    cmd.arg("--output=json");
+    cmd.current_dir(cwd);
+
+    let output = cmd
         .output()
         .map_err(|e| CcmError::Gj(format!("failed to run gj new: {e}")))?;
 
