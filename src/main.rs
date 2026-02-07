@@ -382,7 +382,7 @@ fn cmd_plan(config: &Config, cwd: Option<String>) -> Result<()> {
         .context("failed to save plan to worktree")?;
 
     let claude_cmd = format!(
-        "{} \"/plan\" < .cctmp/plan.md\n",
+        "{} --permission-mode=plan < .cctmp/plan.md\n",
         config.wezterm.claude_command.trim_end_matches('\n')
     );
     wezterm::send_text(&config.wezterm.binary, info.claude_pane_id, &claude_cmd)
