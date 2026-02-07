@@ -46,8 +46,8 @@ fn main() -> Result<()> {
         Command::Close { name, merge } => cmd_close(&config, name, merge)?,
         Command::Plan { cwd } => cmd_plan(&config, cwd)?,
         Command::TabWatcher { session } => tui::run(&session, &config)?,
-        Command::Wrap { session, command } => {
-            let exit_code = pty_wrap::run_wrap(&session, &command)?;
+        Command::Wrap { session, prompt_file, command } => {
+            let exit_code = pty_wrap::run_wrap(&session, &command, prompt_file.as_deref())?;
             std::process::exit(exit_code);
         }
         Command::Init => unreachable!(),
@@ -406,10 +406,15 @@ fn cmd_plan(config: &Config, cwd: Option<String>) -> Result<()> {
     let ccm_path = env::current_exe().context("failed to get ccm executable path")?;
     let ccm_str = ccm_path.to_string_lossy().to_string();
     let quoted_session = info.session_name.replace('\'', "'\\''");
+    let plan_path = PathBuf::from(&info.worktree_path)
+        .join(".cctmp/plan.md");
+    let plan_path_str = plan_path.to_string_lossy();
+    let quoted_plan_path = plan_path_str.replace('\'', "'\\''");
     let claude_cmd = format!(
-        "{} wrap --session '{}' -- {} --permission-mode=plan < .cctmp/plan.md\n",
+        "{} wrap --session '{}' --prompt-file '{}' -- {} --permission-mode=plan\n",
         ccm_str,
         quoted_session,
+        quoted_plan_path,
         config.wezterm.claude_command.trim_end_matches('\n')
     );
     wezterm::send_text(&config.wezterm.binary, info.claude_pane_id, &claude_cmd)

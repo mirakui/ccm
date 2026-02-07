@@ -294,7 +294,7 @@ fn shell_join(args: &[String]) -> String {
 // run_wrap — main entry point
 // ---------------------------------------------------------------------------
 
-pub fn run_wrap(session_name: &str, command: &[String]) -> Result<i32> {
+pub fn run_wrap(session_name: &str, command: &[String], prompt_file: Option<&str>) -> Result<i32> {
     if command.is_empty() {
         anyhow::bail!("no command specified");
     }
@@ -312,11 +312,32 @@ pub fn run_wrap(session_name: &str, command: &[String]) -> Result<i32> {
         }
     }
 
+    // If a prompt file is specified, read its content and append as a positional argument.
+    // This passes the plan content as Claude's initial prompt instead of via stdin redirect.
+    let mut cmd_vec = command.to_vec();
+    if let Some(path) = prompt_file {
+        let metadata = std::fs::metadata(path)
+            .with_context(|| format!("failed to stat prompt file '{}'", path))?;
+        if metadata.len() > 512 * 1024 {
+            anyhow::bail!(
+                "prompt file '{}' is too large ({} bytes, max 512KB)",
+                path,
+                metadata.len()
+            );
+        }
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read prompt file '{}'", path))?;
+        let trimmed = content.trim();
+        if !trimmed.is_empty() {
+            cmd_vec.push(trimmed.to_string());
+        }
+    }
+
     // Prepare CStrings before fork (allocation is not async-signal-safe).
     // Execute through the user's shell with -ic so that aliases and shell
     // functions (e.g. `claude-dev`) are properly resolved.
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let cmd_str = shell_join(command);
+    let cmd_str = shell_join(&cmd_vec);
     let c_shell = CString::new(shell.as_str()).context("SHELL contains null byte")?;
     let c_flag = CString::new("-ic").unwrap();
     let c_cmd = CString::new(cmd_str.as_str()).context("command contains null byte")?;

@@ -52,6 +52,9 @@ pub enum Command {
         /// Session name to update status for
         #[arg(long)]
         session: String,
+        /// Optional file whose content is appended as a positional argument to the command
+        #[arg(long)]
+        prompt_file: Option<String>,
         /// Command and arguments to run
         #[arg(trailing_var_arg = true, required = true)]
         command: Vec<String>,
