@@ -262,6 +262,35 @@ fn update_claude_status(
 }
 
 // ---------------------------------------------------------------------------
+// Shell quoting helper
+// ---------------------------------------------------------------------------
+
+/// Join command arguments into a single shell-safe string.
+/// Each argument is single-quoted to prevent shell interpretation.
+fn shell_join(args: &[String]) -> String {
+    args.iter()
+        .map(|a| {
+            if a.is_empty() {
+                "''".to_string()
+            } else if a.bytes().all(|b| {
+                b.is_ascii_alphanumeric()
+                    || b == b'-'
+                    || b == b'_'
+                    || b == b'.'
+                    || b == b'/'
+                    || b == b':'
+                    || b == b'='
+            }) {
+                a.clone()
+            } else {
+                format!("'{}'", a.replace('\'', "'\\''"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+// ---------------------------------------------------------------------------
 // run_wrap — main entry point
 // ---------------------------------------------------------------------------
 
@@ -283,19 +312,20 @@ pub fn run_wrap(session_name: &str, command: &[String]) -> Result<i32> {
         }
     }
 
-    // Prepare CStrings before fork (allocation is not async-signal-safe)
-    let c_prog =
-        CString::new(command[0].as_str()).context("command contains null byte")?;
-    let c_args: Vec<CString> = command
-        .iter()
-        .map(|a| CString::new(a.as_str()))
-        .collect::<std::result::Result<_, _>>()
-        .context("command arg contains null byte")?;
-    let c_argv: Vec<*const libc::c_char> = c_args
-        .iter()
-        .map(|a| a.as_ptr())
-        .chain(std::iter::once(std::ptr::null()))
-        .collect();
+    // Prepare CStrings before fork (allocation is not async-signal-safe).
+    // Execute through the user's shell with -ic so that aliases and shell
+    // functions (e.g. `claude-dev`) are properly resolved.
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    let cmd_str = shell_join(command);
+    let c_shell = CString::new(shell.as_str()).context("SHELL contains null byte")?;
+    let c_flag = CString::new("-ic").unwrap();
+    let c_cmd = CString::new(cmd_str.as_str()).context("command contains null byte")?;
+    let c_argv: Vec<*const libc::c_char> = vec![
+        c_shell.as_ptr(),
+        c_flag.as_ptr(),
+        c_cmd.as_ptr(),
+        std::ptr::null(),
+    ];
 
     // Fork
     let pid = unsafe { libc::fork() };
@@ -320,7 +350,7 @@ pub fn run_wrap(session_name: &str, command: &[String]) -> Result<i32> {
                 libc::close(slave);
             }
 
-            libc::execvp(c_prog.as_ptr(), c_argv.as_ptr());
+            libc::execvp(c_shell.as_ptr(), c_argv.as_ptr());
 
             // exec failed — use only async-signal-safe write
             let msg = b"exec failed\n";
