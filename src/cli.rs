@@ -29,6 +29,12 @@ pub enum Command {
         /// Session name
         name: String,
     },
+    /// Create a new session from a plan (opens editor)
+    Plan {
+        /// Working directory (defaults to current directory)
+        #[arg(long)]
+        cwd: Option<String>,
+    },
     /// Initialize config file with defaults
     Init,
     /// Run the tab-watcher TUI sidebar (internal use)

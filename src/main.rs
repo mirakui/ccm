@@ -8,6 +8,8 @@ mod tui;
 mod wezterm;
 
 use std::env;
+use std::fs;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -34,10 +36,13 @@ fn main() -> Result<()> {
     }
 
     match cli.command {
-        Command::New { name, cwd } => cmd_new(&config, name, cwd)?,
+        Command::New { name, cwd } => {
+            cmd_new(&config, name, cwd)?;
+        }
         Command::List => cmd_list(&config)?,
         Command::Switch { name } => cmd_switch(&config, &name)?,
         Command::Close { name } => cmd_close(&config, &name)?,
+        Command::Plan { cwd } => cmd_plan(&config, cwd)?,
         Command::TabWatcher { session } => tui::run(&session, &config)?,
         Command::Init => unreachable!(),
     }
@@ -45,7 +50,8 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn cmd_new(config: &Config, name: Option<String>, cwd: Option<String>) -> Result<()> {
+/// Returns (worktree_path, session_name) on success.
+fn cmd_new(config: &Config, name: Option<String>, cwd: Option<String>) -> Result<(String, String)> {
     let cwd = match cwd {
         Some(p) => p,
         None => env::current_dir()
@@ -170,8 +176,10 @@ fn cmd_new(config: &Config, name: Option<String>, cwd: Option<String>) -> Result
         eprintln!("Warning: failed to activate claude pane: {e}");
     }
 
+    let created_cwd = session.cwd.clone();
+    let created_name = session_name.clone();
     println!("Created session '{session_name}' (tab {tab_id}, branch {branch})");
-    Ok(())
+    Ok((created_cwd, created_name))
 }
 
 fn cmd_list(config: &Config) -> Result<()> {
@@ -223,6 +231,142 @@ fn cmd_switch(config: &Config, name: &str) -> Result<()> {
     Ok(())
 }
 
+fn get_editor() -> String {
+    env::var("VISUAL")
+        .or_else(|_| env::var("EDITOR"))
+        .unwrap_or_else(|_| "vim".to_string())
+}
+
+fn open_editor_for_plan() -> Result<String> {
+    use std::io::Read;
+
+    let tmp_dir = env::temp_dir();
+    let tmp_path = tmp_dir.join(format!(
+        "ccm-plan-{}-{}.md",
+        std::process::id(),
+        Utc::now().timestamp_nanos_opt().unwrap_or(0)
+    ));
+
+    // Use create_new (O_EXCL) to prevent symlink attacks on predictable paths
+    fs::File::create_new(&tmp_path).context("failed to create temporary plan file")?;
+
+    let editor = get_editor();
+    let mut parts = editor.split_whitespace();
+    let program = parts.next().unwrap_or("vim");
+    let editor_args: Vec<&str> = parts.collect();
+
+    let status = std::process::Command::new(program)
+        .args(editor_args)
+        .arg(&tmp_path)
+        .status()
+        .context(format!("failed to launch editor '{}'", editor))?;
+
+    if !status.success() {
+        fs::remove_file(&tmp_path).ok();
+        anyhow::bail!("editor exited with non-zero status");
+    }
+
+    let mut content = String::new();
+    fs::File::open(&tmp_path)
+        .context("failed to open plan file after editing")?
+        .read_to_string(&mut content)
+        .context("failed to read plan file")?;
+
+    fs::remove_file(&tmp_path).ok();
+
+    Ok(content)
+}
+
+fn sanitize_session_name(s: &str) -> String {
+    // Single-pass: collapse non-alphanumeric runs into a single hyphen.
+    // Result is always pure ASCII, so byte-level truncation is safe.
+    let mut result = String::with_capacity(s.len());
+    let mut prev_hyphen = false;
+
+    for c in s.to_lowercase().chars() {
+        if c.is_ascii_alphanumeric() {
+            result.push(c);
+            prev_hyphen = false;
+        } else if !prev_hyphen {
+            result.push('-');
+            prev_hyphen = true;
+        }
+    }
+
+    let trimmed = result.trim_matches('-');
+    if trimmed.len() > 50 {
+        trimmed[..50].trim_end_matches('-').to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn extract_name_from_first_line(content: &str) -> Option<String> {
+    let first_line = content
+        .lines()
+        .map(|l| l.trim())
+        .find(|l| !l.is_empty())?;
+
+    // Strip markdown heading prefix (e.g. "# Title" -> "Title")
+    let stripped = first_line.trim_start_matches('#').trim_start();
+
+    let name = sanitize_session_name(stripped);
+    if name.is_empty() {
+        return None;
+    }
+    Some(name)
+}
+
+fn generate_session_name_from_plan(content: &str) -> String {
+    if let Some(name) = extract_name_from_first_line(content) {
+        if name.len() >= 3 {
+            return name;
+        }
+    }
+
+    let now = Utc::now();
+    format!("plan-{}", now.format("%Y%m%d-%H%M%S"))
+}
+
+fn save_plan_to_worktree(worktree_path: &str, content: &str) -> Result<()> {
+    let cctmp_dir = PathBuf::from(worktree_path).join(".cctmp");
+
+    fs::create_dir_all(&cctmp_dir).context("failed to create .cctmp directory")?;
+
+    // Ensure .cctmp contents are gitignored
+    let gitignore = cctmp_dir.join(".gitignore");
+    if !gitignore.exists() {
+        fs::write(&gitignore, "*\n").ok();
+    }
+
+    let plan_file = cctmp_dir.join("plan.md");
+    fs::write(&plan_file, content).context("failed to write plan.md")?;
+
+    Ok(())
+}
+
+fn cmd_plan(config: &Config, cwd: Option<String>) -> Result<()> {
+    let plan_content = open_editor_for_plan().context("failed to capture plan content")?;
+
+    let trimmed = plan_content.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("plan content is empty. Session not created.");
+    }
+
+    let branch_suffix = generate_session_name_from_plan(&plan_content);
+
+    println!("Creating session with branch suffix '{}'...", branch_suffix);
+
+    let (worktree_path, _session_name) = cmd_new(config, Some(branch_suffix), cwd)?;
+
+    save_plan_to_worktree(&worktree_path, &plan_content)
+        .context("failed to save plan to worktree")?;
+
+    println!("Plan saved to .cctmp/plan.md");
+
+    Ok(())
+}
+
 fn cmd_close(config: &Config, name: &str) -> Result<()> {
     let binary = &config.wezterm.binary;
 
@@ -253,4 +397,105 @@ fn cmd_close(config: &Config, name: &str) -> Result<()> {
 
     println!("Closed session '{name}'");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_basic() {
+        assert_eq!(
+            sanitize_session_name("Implement User Auth"),
+            "implement-user-auth"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_special_chars() {
+        assert_eq!(sanitize_session_name("Fix bug #123!"), "fix-bug-123");
+    }
+
+    #[test]
+    fn test_sanitize_unicode() {
+        assert_eq!(
+            sanitize_session_name("API redesign 🚀"),
+            "api-redesign"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_consecutive_hyphens() {
+        assert_eq!(sanitize_session_name("a---b"), "a-b");
+    }
+
+    #[test]
+    fn test_sanitize_max_length() {
+        let long = "a".repeat(100);
+        let result = sanitize_session_name(&long);
+        assert!(result.len() <= 50);
+    }
+
+    #[test]
+    fn test_generate_name_from_first_line() {
+        let plan = "Implement authentication\n\nDetails here";
+        assert_eq!(
+            generate_session_name_from_plan(plan),
+            "implement-authentication"
+        );
+    }
+
+    #[test]
+    fn test_generate_name_empty_content() {
+        let name = generate_session_name_from_plan("");
+        assert!(name.starts_with("plan-"));
+    }
+
+    #[test]
+    fn test_generate_name_only_whitespace() {
+        let name = generate_session_name_from_plan("   \n\n   ");
+        assert!(name.starts_with("plan-"));
+    }
+
+    #[test]
+    fn test_extract_name_skips_empty_lines() {
+        let content = "\n\n  \nImplement feature\n";
+        let result = extract_name_from_first_line(content);
+        assert_eq!(result, Some("implement-feature".to_string()));
+    }
+
+    #[test]
+    fn test_extract_name_too_short() {
+        let content = "ab";
+        let result = extract_name_from_first_line(content);
+        assert_eq!(result, Some("ab".to_string()));
+    }
+
+    #[test]
+    fn test_sanitize_all_special_chars() {
+        assert_eq!(sanitize_session_name("---"), "");
+        assert_eq!(sanitize_session_name("🚀🐛"), "");
+    }
+
+    #[test]
+    fn test_extract_name_all_special_returns_none() {
+        let content = "🚀🐛\nsome text";
+        let result = extract_name_from_first_line(content);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_name_markdown_heading() {
+        let content = "# Implement auth\n\nDetails";
+        assert_eq!(
+            extract_name_from_first_line(content),
+            Some("implement-auth".to_string())
+        );
+    }
+
+    #[test]
+    fn test_generate_name_all_special_first_line_falls_back() {
+        let name = generate_session_name_from_plan("🚀🐛\n");
+        assert!(name.starts_with("plan-"));
+    }
 }
