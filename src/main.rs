@@ -37,7 +37,8 @@ fn main() -> Result<()> {
 
     match cli.command {
         Command::New { name, cwd } => {
-            cmd_new(&config, name, cwd)?;
+            let claude_cmd = config.wezterm.claude_command.clone();
+            cmd_new(&config, name, cwd, Some(claude_cmd))?;
         }
         Command::List => cmd_list(&config)?,
         Command::Switch { name } => cmd_switch(&config, &name)?,
@@ -50,8 +51,21 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Returns (worktree_path, session_name) on success.
-fn cmd_new(config: &Config, name: Option<String>, cwd: Option<String>) -> Result<(String, String)> {
+struct NewSessionInfo {
+    worktree_path: String,
+    #[allow(dead_code)]
+    session_name: String,
+    claude_pane_id: u64,
+}
+
+/// Creates a new session. If `claude_command` is `Some`, sends it to the claude pane.
+/// If `None`, the caller is responsible for sending the command later.
+fn cmd_new(
+    config: &Config,
+    name: Option<String>,
+    cwd: Option<String>,
+    claude_command: Option<String>,
+) -> Result<NewSessionInfo> {
     let cwd = match cwd {
         Some(p) => p,
         None => env::current_dir()
@@ -127,10 +141,12 @@ fn cmd_new(config: &Config, name: Option<String>, cwd: Option<String>) -> Result
         }
     };
 
-    // 5. Send claude command to the claude pane
-    let claude_cmd = format!("{}\n", config.wezterm.claude_command.trim_end_matches('\n'));
-    wezterm::send_text(binary, claude_pane_id, &claude_cmd)
-        .context("failed to send claude command to pane")?;
+    // 5. Send claude command to the claude pane (if provided)
+    if let Some(cmd) = &claude_command {
+        let claude_cmd = format!("{}\n", cmd.trim_end_matches('\n'));
+        wezterm::send_text(binary, claude_pane_id, &claude_cmd)
+            .context("failed to send claude command to pane")?;
+    }
 
     // 6. Set tab title
     wezterm::set_tab_title(binary, watcher_pane_id, &session_name)
@@ -177,9 +193,12 @@ fn cmd_new(config: &Config, name: Option<String>, cwd: Option<String>) -> Result
     }
 
     let created_cwd = session.cwd.clone();
-    let created_name = session_name.clone();
     println!("Created session '{session_name}' (tab {tab_id}, branch {branch})");
-    Ok((created_cwd, created_name))
+    Ok(NewSessionInfo {
+        worktree_path: created_cwd,
+        session_name,
+        claude_pane_id,
+    })
 }
 
 fn cmd_list(config: &Config) -> Result<()> {
@@ -357,10 +376,17 @@ fn cmd_plan(config: &Config, cwd: Option<String>) -> Result<()> {
 
     println!("Creating session with branch suffix '{}'...", branch_suffix);
 
-    let (worktree_path, _session_name) = cmd_new(config, Some(branch_suffix), cwd)?;
+    let info = cmd_new(config, Some(branch_suffix), cwd, None)?;
 
-    save_plan_to_worktree(&worktree_path, &plan_content)
+    save_plan_to_worktree(&info.worktree_path, &plan_content)
         .context("failed to save plan to worktree")?;
+
+    let claude_cmd = format!(
+        "{} \"/plan\" < .cctmp/plan.md\n",
+        config.wezterm.claude_command.trim_end_matches('\n')
+    );
+    wezterm::send_text(&config.wezterm.binary, info.claude_pane_id, &claude_cmd)
+        .context("failed to send claude plan command to pane")?;
 
     println!("Plan saved to .cctmp/plan.md");
 
