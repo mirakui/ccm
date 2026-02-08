@@ -6,7 +6,7 @@ WezTerm のマルチプレクサ機能を使って複数の Claude Code セッ�
 
 ```
 src/
-  main.rs          -- エントリポイント、CLI ディスパッチ（new/list/switch/close）
+  main.rs          -- エントリポイント、CLI ディスパッチ（new/list/switch/close/reset-layout）
   cli.rs           -- clap derive によるコマンド定義
   config.rs        -- 設定ファイル読み込み（~/.config/ccm/config.toml, serde + toml）
   error.rs         -- CcmError（thiserror）
@@ -28,6 +28,7 @@ cargo run -- new <session-name>
 cargo run -- list
 cargo run -- switch <session-name>
 cargo run -- close <session-name>
+cargo run -- reset-layout          # セッションタブ内のペインから実行
 ```
 
 ## 設計方針
@@ -73,3 +74,7 @@ tick_interval_secs = 3       # reconciliation の間隔 (秒, >= 1)
 ```
 
 レイアウト比率は設定ファイルで変更可能。
+
+### reset-layout
+
+`ccm reset-layout` はセッションタブ内の任意のペインから実行可能。claude ペインをアンカーとして残し、他のペインをすべて kill してから watcher + shell を再作成する。`WEZTERM_PANE` 環境変数でセッションを自動検出する。

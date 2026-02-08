@@ -41,6 +41,8 @@ pub enum Command {
     },
     /// Initialize config file with defaults
     Init,
+    /// Reset the pane layout of the current session tab
+    ResetLayout,
     /// Run the tab-watcher TUI sidebar (internal use)
     TabWatcher {
         /// Session name this watcher belongs to

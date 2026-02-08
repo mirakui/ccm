@@ -11,6 +11,7 @@ mod wezterm;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -45,6 +46,7 @@ fn main() -> Result<()> {
         Command::Switch { name } => cmd_switch(&config, &name)?,
         Command::Close { name, merge } => cmd_close(&config, name, merge)?,
         Command::Plan { cwd } => cmd_plan(&config, cwd)?,
+        Command::ResetLayout => cmd_reset_layout(&config)?,
         Command::TabWatcher { session } => tui::run(&session, &config)?,
         Command::Wrap { session, prompt_file, command } => {
             let exit_code = pty_wrap::run_wrap(&session, &command, prompt_file.as_deref())?;
@@ -426,6 +428,125 @@ fn cmd_plan(config: &Config, cwd: Option<String>) -> Result<()> {
     Ok(())
 }
 
+fn cmd_reset_layout(config: &Config) -> Result<()> {
+    let binary = &config.wezterm.binary;
+
+    // 1. Get current pane ID from environment
+    let current_pane_id: u64 = env::var("WEZTERM_PANE")
+        .context("WEZTERM_PANE environment variable not set (must run inside a WezTerm pane)")?
+        .parse()
+        .context("WEZTERM_PANE is not a valid pane ID")?;
+
+    // 2. Find the session that owns this pane
+    let state = state::load()?;
+    let session = Session::find_by_pane_id(&state.sessions, current_pane_id)
+        .ok_or_else(|| anyhow::anyhow!(
+            "no session found containing pane {current_pane_id}"
+        ))?;
+
+    let session_name = session.name.clone();
+    let claude_pane_id = session.claude_pane_id;
+    let watcher_pane_id = session.watcher_pane_id;
+    let shell_pane_id = session.shell_pane_id;
+
+    // 3. Verify claude pane is alive (it's the layout anchor)
+    let live_panes = wezterm::list_panes(binary)?;
+    if !live_panes.iter().any(|p| p.pane_id == claude_pane_id) {
+        anyhow::bail!(
+            "claude pane ({claude_pane_id}) is not alive; cannot reset layout"
+        );
+    }
+
+    // 4. Ignore SIGHUP so our process survives when our own pane is killed.
+    // SAFETY: SIG_IGN is a well-defined signal disposition. No signal handler
+    // function pointers are involved, so there are no lifetime or thread-safety
+    // concerns. The process exits shortly after, so the disposition is not restored.
+    if current_pane_id != claude_pane_id {
+        unsafe {
+            libc::signal(libc::SIGHUP, libc::SIG_IGN);
+        }
+    }
+
+    // 5. Kill all panes except claude (self last)
+    let mut others: Vec<u64> = [watcher_pane_id, shell_pane_id]
+        .iter()
+        .copied()
+        .filter(|&id| id != claude_pane_id && id != current_pane_id)
+        .collect();
+    // Also kill any extra panes in the same tab that aren't claude
+    let tab_id = live_panes
+        .iter()
+        .find(|p| p.pane_id == claude_pane_id)
+        .map(|p| p.tab_id);
+    if let Some(tab_id) = tab_id {
+        for p in &live_panes {
+            if p.tab_id == tab_id
+                && p.pane_id != claude_pane_id
+                && p.pane_id != current_pane_id
+                && !others.contains(&p.pane_id)
+            {
+                others.push(p.pane_id);
+            }
+        }
+    }
+
+    for &id in &others {
+        let _ = wezterm::kill_pane(binary, id);
+    }
+
+    // Kill own pane last (if not claude)
+    if current_pane_id != claude_pane_id {
+        let _ = wezterm::kill_pane(binary, current_pane_id);
+        std::thread::sleep(Duration::from_millis(300));
+    }
+
+    // 6. Rebuild layout from claude pane
+    let ccm_path = env::current_exe().context("failed to get ccm executable path")?;
+    let ccm_str = ccm_path.to_string_lossy().to_string();
+
+    let new_watcher = wezterm::split_pane(
+        binary,
+        claude_pane_id,
+        wezterm::SplitDirection::Left,
+        config.layout.watcher_width,
+        Some(&[&ccm_str, "tab-watcher", "--session", &session_name]),
+    )
+    .context("failed to create watcher pane")?;
+
+    let new_shell = wezterm::split_pane(
+        binary,
+        claude_pane_id,
+        wezterm::SplitDirection::Bottom,
+        config.layout.shell_height,
+        None,
+    )
+    .context("failed to create shell pane")?;
+
+    // 7. Set tab title
+    wezterm::set_tab_title(binary, new_watcher, &session_name)
+        .context("failed to set tab title")?;
+
+    // 8. Update state with new pane IDs
+    state::update(|state| {
+        let s = state
+            .sessions
+            .iter_mut()
+            .find(|s| s.name == session_name)
+            .ok_or_else(|| CcmError::SessionNotFound(session_name.clone()))?;
+        s.watcher_pane_id = new_watcher;
+        s.shell_pane_id = new_shell;
+        Ok(())
+    })?;
+
+    // 9. Activate claude pane
+    let _ = wezterm::activate_pane(binary, claude_pane_id);
+
+    // stdout may be gone if we killed our own pane
+    use std::io::Write;
+    let _ = writeln!(std::io::stdout(), "Reset layout for session '{session_name}'");
+    Ok(())
+}
+
 fn cmd_close(config: &Config, name: Option<String>, merge: bool) -> Result<()> {
     let name = match name {
         Some(n) => n,
@@ -575,6 +696,12 @@ mod tests {
     fn test_generate_name_all_special_first_line_falls_back() {
         let name = generate_session_name_from_plan("🚀🐛\n");
         assert!(name.starts_with("plan-"));
+    }
+
+    #[test]
+    fn test_cli_parse_reset_layout() {
+        let cli = Cli::parse_from(["ccm", "reset-layout"]);
+        assert!(matches!(cli.command, Command::ResetLayout));
     }
 }
 
