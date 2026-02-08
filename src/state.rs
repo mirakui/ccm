@@ -115,6 +115,7 @@ mod tests {
             cwd: "/tmp".to_string(),
             created_at: Utc::now(),
             claude_status: None,
+            plans_pane_id: None,
         }
     }
 

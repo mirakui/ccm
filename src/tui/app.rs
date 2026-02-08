@@ -148,6 +148,7 @@ impl App {
                 !live_pane_ids.contains(&s.claude_pane_id)
                     && !live_pane_ids.contains(&s.shell_pane_id)
                     && !live_pane_ids.contains(&s.watcher_pane_id)
+                    && !s.plans_pane_id.is_some_and(|id| live_pane_ids.contains(&id))
             })
             .map(|s| s.name.clone())
             .collect();
@@ -284,6 +285,9 @@ impl App {
         // Kill watcher pane last so that own-session close completes shell/claude kills first
         let _ = wezterm::kill_pane(&self.wezterm_binary, session.shell_pane_id);
         let _ = wezterm::kill_pane(&self.wezterm_binary, session.claude_pane_id);
+        if let Some(plans_pane_id) = session.plans_pane_id {
+            let _ = wezterm::kill_pane(&self.wezterm_binary, plans_pane_id);
+        }
         let _ = wezterm::kill_pane(&self.wezterm_binary, session.watcher_pane_id);
 
         // Clean up git worktree (best-effort for non-merge path)
@@ -357,6 +361,7 @@ mod tests {
             cwd: "/tmp".to_string(),
             created_at: Utc::now(),
             claude_status: None,
+            plans_pane_id: None,
         }
     }
 

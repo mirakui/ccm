@@ -23,6 +23,7 @@ pub struct WeztermConfig {
 pub struct LayoutConfig {
     pub watcher_width: u32,
     pub shell_height: u32,
+    pub plans_width: u32,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -45,6 +46,7 @@ impl Default for LayoutConfig {
         Self {
             watcher_width: 20,
             shell_height: 30,
+            plans_width: 30,
         }
     }
 }
@@ -80,6 +82,8 @@ claude_command = "claude"
 watcher_width = 20
 # Shell pane height (%, 1-99)
 shell_height = 30
+# Plans viewer pane width (%, 1-99)
+plans_width = 30
 
 [tui]
 # Reconciliation interval in seconds (>= 1)
@@ -143,6 +147,14 @@ tick_interval_secs = 3
         if self.layout.shell_height == 0 || self.layout.shell_height >= 100 {
             anyhow::bail!("config error: layout.shell_height must be between 1 and 99");
         }
+        if self.layout.plans_width == 0 || self.layout.plans_width >= 100 {
+            anyhow::bail!("config error: layout.plans_width must be between 1 and 99");
+        }
+        if self.layout.watcher_width + self.layout.plans_width >= 95 {
+            anyhow::bail!(
+                "config error: layout.watcher_width + layout.plans_width must be less than 95 to leave room for the claude pane"
+            );
+        }
         Ok(())
     }
 }
@@ -158,6 +170,7 @@ mod tests {
         assert_eq!(config.wezterm.claude_command, "claude");
         assert_eq!(config.layout.watcher_width, 20);
         assert_eq!(config.layout.shell_height, 30);
+        assert_eq!(config.layout.plans_width, 30);
         assert_eq!(config.tui.tick_interval_secs, 3);
     }
 
@@ -171,6 +184,7 @@ claude_command = "claude --model opus"
 [layout]
 watcher_width = 25
 shell_height = 40
+plans_width = 35
 
 [tui]
 tick_interval_secs = 5
@@ -180,6 +194,7 @@ tick_interval_secs = 5
         assert_eq!(config.wezterm.claude_command, "claude --model opus");
         assert_eq!(config.layout.watcher_width, 25);
         assert_eq!(config.layout.shell_height, 40);
+        assert_eq!(config.layout.plans_width, 35);
         assert_eq!(config.tui.tick_interval_secs, 5);
     }
 
@@ -253,6 +268,28 @@ tick_interval_secs = 10
     }
 
     #[test]
+    fn validate_rejects_zero_plans_width() {
+        let mut config = Config::default();
+        config.layout.plans_width = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_100_plans_width() {
+        let mut config = Config::default();
+        config.layout.plans_width = 100;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_combined_width_too_large() {
+        let mut config = Config::default();
+        config.layout.watcher_width = 50;
+        config.layout.plans_width = 50;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
     fn validate_accepts_valid_config() {
         let config = Config::default();
         assert!(config.validate().is_ok());
@@ -267,6 +304,7 @@ tick_interval_secs = 10
         assert_eq!(parsed.wezterm.claude_command, default.wezterm.claude_command);
         assert_eq!(parsed.layout.watcher_width, default.layout.watcher_width);
         assert_eq!(parsed.layout.shell_height, default.layout.shell_height);
+        assert_eq!(parsed.layout.plans_width, default.layout.plans_width);
         assert_eq!(
             parsed.tui.tick_interval_secs,
             default.tui.tick_interval_secs

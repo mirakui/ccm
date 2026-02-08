@@ -15,6 +15,7 @@ pub struct PaneInfo {
 
 pub enum SplitDirection {
     Left,
+    Right,
     Bottom,
 }
 
@@ -55,6 +56,7 @@ pub fn split_pane(
 
     match direction {
         SplitDirection::Left => args.push("--left".to_string()),
+        SplitDirection::Right => args.push("--right".to_string()),
         SplitDirection::Bottom => args.push("--bottom".to_string()),
     }
 

@@ -12,6 +12,8 @@ pub struct Session {
     pub created_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plans_pane_id: Option<u64>,
 }
 
 impl Session {
@@ -40,6 +42,7 @@ mod tests {
             cwd: "/tmp".to_string(),
             created_at: Utc::now(),
             claude_status: None,
+            plans_pane_id: None,
         }
     }
 

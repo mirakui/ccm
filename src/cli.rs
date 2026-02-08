@@ -49,6 +49,11 @@ pub enum Command {
         #[arg(long)]
         session: String,
     },
+    /// Watch and display the latest .ccm/plans/*.md file (internal use)
+    PlanViewer {
+        #[arg(long)]
+        cwd: String,
+    },
     /// Wrap a command in a PTY, intercepting OSC 0 title changes (internal)
     Wrap {
         /// Session name to update status for

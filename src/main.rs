@@ -2,6 +2,7 @@ mod cli;
 mod config;
 mod error;
 mod gj;
+mod plan_viewer;
 mod pty_wrap;
 mod session;
 mod state;
@@ -48,6 +49,7 @@ fn main() -> Result<()> {
         Command::Plan { cwd } => cmd_plan(&config, cwd)?,
         Command::ResetLayout => cmd_reset_layout(&config)?,
         Command::TabWatcher { session } => tui::run(&session, &config)?,
+        Command::PlanViewer { cwd } => plan_viewer::run(&cwd)?,
         Command::Wrap { session, prompt_file, command } => {
             let exit_code = pty_wrap::run_wrap(&session, &command, prompt_file.as_deref())?;
             std::process::exit(exit_code);
@@ -63,6 +65,8 @@ struct NewSessionInfo {
     #[allow(dead_code)]
     session_name: String,
     claude_pane_id: u64,
+    #[allow(dead_code)]
+    plans_pane_id: Option<u64>,
 }
 
 /// Creates a new session. If `claude_command` is `Some`, sends it to the claude pane.
@@ -148,7 +152,22 @@ fn cmd_new(
         }
     };
 
-    // 5. Send claude command to the claude pane (via PTY wrapper for OSC 0 detection)
+    // 5. Split right for plans viewer (best-effort: failure doesn't abort session)
+    let plans_pane_id = match wezterm::split_pane(
+        binary,
+        claude_pane_id,
+        wezterm::SplitDirection::Right,
+        config.layout.plans_width,
+        Some(&[&ccm_str, "plan-viewer", "--cwd", &worktree_path]),
+    ) {
+        Ok(id) => Some(id),
+        Err(e) => {
+            eprintln!("Warning: failed to create plans viewer pane: {e}");
+            None
+        }
+    };
+
+    // 6. Send claude command to the claude pane (via PTY wrapper for OSC 0 detection)
     if let Some(cmd) = &claude_command {
         let quoted_session = session_name.replace('\'', "'\\''");
         let wrapped_cmd = format!(
@@ -161,11 +180,11 @@ fn cmd_new(
             .context("failed to send claude command to pane")?;
     }
 
-    // 6. Set tab title
+    // 7. Set tab title
     wezterm::set_tab_title(binary, watcher_pane_id, &session_name)
         .context("failed to set tab title")?;
 
-    // 7. Find the tab_id from wezterm list
+    // 8. Find the tab_id from wezterm list
     let panes = wezterm::list_panes(binary).context("failed to list panes")?;
     let tab_id = panes
         .iter()
@@ -173,7 +192,7 @@ fn cmd_new(
         .map(|p| p.tab_id)
         .ok_or_else(|| anyhow::anyhow!("could not find tab_id for pane {claude_pane_id}"))?;
 
-    // 8. Save to state (duplicate check inside lock to avoid TOCTOU race)
+    // 9. Save to state (duplicate check inside lock to avoid TOCTOU race)
     let session = Session {
         name: session_name.clone(),
         tab_id,
@@ -183,6 +202,7 @@ fn cmd_new(
         cwd: worktree_path,
         created_at: Utc::now(),
         claude_status: None,
+        plans_pane_id,
     };
 
     let result = state::update(|state| {
@@ -195,7 +215,11 @@ fn cmd_new(
     });
 
     if let Err(e) = result {
-        cleanup_panes(binary, &[watcher_pane_id, shell_pane_id, claude_pane_id]);
+        let mut panes_to_kill = vec![watcher_pane_id, shell_pane_id, claude_pane_id];
+        if let Some(pid) = plans_pane_id {
+            panes_to_kill.push(pid);
+        }
+        cleanup_panes(binary, &panes_to_kill);
         let _ = gj::exit_worktree(&session.cwd, false);
         return Err(e.into());
     }
@@ -212,6 +236,7 @@ fn cmd_new(
         worktree_path: created_cwd,
         session_name,
         claude_pane_id,
+        plans_pane_id,
     })
 }
 
@@ -231,7 +256,8 @@ fn cmd_list(config: &Config) -> Result<()> {
         let active_mark = if is_active { " *" } else { "" };
 
         let alive = live_pane_ids.contains(&session.claude_pane_id)
-            || live_pane_ids.contains(&session.shell_pane_id);
+            || live_pane_ids.contains(&session.shell_pane_id)
+            || session.plans_pane_id.is_some_and(|id| live_pane_ids.contains(&id));
         let status = if alive { "" } else { " [dead]" };
 
         let claude_status = session
@@ -584,10 +610,13 @@ fn cmd_close(config: &Config, name: Option<String>, merge: bool) -> Result<()> {
 
     let session = removed_session.expect("session was just removed in update closure");
 
-    // Kill all three panes (ignore errors for already-dead panes)
+    // Kill all panes (ignore errors for already-dead panes)
     let _ = wezterm::kill_pane(binary, session.watcher_pane_id);
     let _ = wezterm::kill_pane(binary, session.shell_pane_id);
     let _ = wezterm::kill_pane(binary, session.claude_pane_id);
+    if let Some(plans_pane_id) = session.plans_pane_id {
+        let _ = wezterm::kill_pane(binary, plans_pane_id);
+    }
 
     // Clean up git worktree (best-effort for non-merge path)
     if !merge {
