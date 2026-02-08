@@ -300,7 +300,7 @@ impl App {
     }
 
     pub fn select_by_click(&mut self, row: u16, area_width: u16) {
-        use super::ui::wrap_text;
+        use super::ui::{session_name_text, wrap_text};
 
         let mut current_row: u16 = 2; // header + separator
         let indent = 3u16;
@@ -309,11 +309,15 @@ impl App {
 
         for (i, session) in self.sessions.iter().enumerate() {
             let session_start = current_row;
-            current_row += 1; // session name line
+            let is_selected = i == self.selected_index;
+            let is_active = self.active_session.as_deref() == Some(&session.name);
+            let is_own = session.name == self.own_session;
+            let text = session_name_text(&session.name, is_selected, is_active, is_own);
+            current_row += wrap_text(&text, area_width as usize).len() as u16;
 
             if let Some(title) = self.pane_titles.get(&session.claude_pane_id) {
                 if !title.is_empty() && box_width > 4 {
-                    let content_lines = wrap_text(title, inner_width).len().max(1);
+                    let content_lines = wrap_text(title, inner_width).len();
                     current_row += (content_lines + 2) as u16; // top + content + bottom
                 }
             }

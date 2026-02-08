@@ -9,6 +9,7 @@ use super::app::{App, ConfirmAction};
 
 /// Wrap text to fit within the given display width (in terminal columns).
 /// Handles multi-byte UTF-8 and wide characters (CJK, emoji) correctly.
+/// Always returns at least one element (empty string for empty input).
 pub fn wrap_text(text: &str, width: usize) -> Vec<String> {
     if width == 0 {
         return vec![text.to_string()];
@@ -62,6 +63,21 @@ pub fn wrap_text(text: &str, width: usize) -> Vec<String> {
         result.push(String::new());
     }
     result
+}
+
+/// Build the display text for a session name line.
+/// Returns something like `" > my-session  ●"` or `"   my-session"`.
+pub fn session_name_text(name: &str, is_selected: bool, is_active: bool, is_own: bool) -> String {
+    // INVARIANT: Both prefixes must have the same display width (3 columns).
+    // select_by_click() depends on this for accurate row counting.
+    let prefix = if is_selected { " > " } else { "   " };
+    let suffix = match (is_active, is_own) {
+        (true, true) => "  ● ◆",
+        (true, false) => "  ●",
+        (false, true) => "  ◆",
+        (false, false) => "",
+    };
+    format!("{prefix}{name}{suffix}")
 }
 
 /// Render a title inside a Unicode box, appending Lines to the given vec.
@@ -171,6 +187,55 @@ mod tests {
         let result = wrap_text("あ", 1);
         assert_eq!(result, vec!["あ"]);
     }
+
+    // ---------------------------------------------------------------
+    // session_name_text
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn session_name_text_selected_active_own() {
+        let text = session_name_text("my-session", true, true, true);
+        assert_eq!(text, " > my-session  ● ◆");
+    }
+
+    #[test]
+    fn session_name_text_unselected_inactive() {
+        let text = session_name_text("foo", false, false, false);
+        assert_eq!(text, "   foo");
+    }
+
+    #[test]
+    fn session_name_text_selected_not_active() {
+        let text = session_name_text("bar", true, false, false);
+        assert_eq!(text, " > bar");
+    }
+
+    #[test]
+    fn session_name_text_own_not_active() {
+        let text = session_name_text("baz", false, false, true);
+        assert_eq!(text, "   baz  ◆");
+    }
+
+    #[test]
+    fn session_name_wraps_when_long() {
+        // " > " (3) + "a"*10 + "  ●" (3) = 16 columns total
+        let name = "a".repeat(10);
+        let text = session_name_text(&name, true, true, false);
+        let wrapped = wrap_text(&text, 10);
+        assert!(wrapped.len() > 1, "long session name should wrap");
+    }
+
+    #[test]
+    fn session_name_prefix_same_width() {
+        // " > " and "   " have the same display width (3 columns)
+        let selected = session_name_text("test", true, false, false);
+        let unselected = session_name_text("test", false, false, false);
+        assert_eq!(
+            UnicodeWidthStr::width(selected.as_str()),
+            UnicodeWidthStr::width(unselected.as_str()),
+            "selected and unselected prefixes should have equal display width"
+        );
+    }
 }
 
 pub fn draw(f: &mut Frame, app: &App) {
@@ -210,14 +275,6 @@ pub fn draw(f: &mut Frame, app: &App) {
             let is_active = app.active_session.as_deref() == Some(&session.name);
             let is_own = session.name == app.own_session;
 
-            let prefix = if is_selected { " > " } else { "   " };
-            let suffix = match (is_active, is_own) {
-                (true, true) => "  ● ◆",
-                (true, false) => "  ●",
-                (false, true) => "  ◆",
-                (false, false) => "",
-            };
-
             let style = if is_selected {
                 Style::default()
                     .fg(Color::Yellow)
@@ -230,10 +287,10 @@ pub fn draw(f: &mut Frame, app: &App) {
                 Style::default().fg(Color::White)
             };
 
-            lines.push(Line::from(Span::styled(
-                format!("{prefix}{}{suffix}", session.name),
-                style,
-            )));
+            let text = session_name_text(&session.name, is_selected, is_active, is_own);
+            for wrapped_line in wrap_text(&text, area.width as usize) {
+                lines.push(Line::from(Span::styled(wrapped_line, style)));
+            }
 
             // Render pane title box if available
             if let Some(title) = app.pane_titles.get(&session.claude_pane_id) {
@@ -252,20 +309,20 @@ pub fn draw(f: &mut Frame, app: &App) {
                 format!(" Close '{name}' with merge? [y/n]")
             }
         };
+        let confirm_style = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            msg,
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        )));
+        for wrapped_line in wrap_text(&msg, area.width as usize) {
+            lines.push(Line::from(Span::styled(wrapped_line, confirm_style)));
+        }
     }
 
     // Status message
     if let Some(ref msg) = app.status_message {
+        let status_style = Style::default().fg(Color::Red);
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            format!(" {msg}"),
-            Style::default().fg(Color::Red),
-        )));
+        for wrapped_line in wrap_text(&format!(" {msg}"), area.width as usize) {
+            lines.push(Line::from(Span::styled(wrapped_line, status_style)));
+        }
     }
 
     let session_widget = Paragraph::new(lines).block(Block::default().borders(Borders::NONE));
