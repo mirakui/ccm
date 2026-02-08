@@ -102,6 +102,77 @@ fn render_title_box(lines: &mut Vec<Line>, title: &str, indent: usize, box_width
     lines.push(Line::from(Span::styled(bottom, style)));
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrap_empty_string() {
+        assert_eq!(wrap_text("", 10), vec![""]);
+    }
+
+    #[test]
+    fn wrap_zero_width() {
+        assert_eq!(wrap_text("hello", 0), vec!["hello"]);
+    }
+
+    #[test]
+    fn wrap_fits_within() {
+        assert_eq!(wrap_text("hello", 10), vec!["hello"]);
+    }
+
+    #[test]
+    fn wrap_exact_width() {
+        assert_eq!(wrap_text("hello", 5), vec!["hello"]);
+    }
+
+    #[test]
+    fn wrap_word_break() {
+        assert_eq!(wrap_text("hello world", 7), vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn wrap_forced_break() {
+        assert_eq!(wrap_text("abcdefghij", 5), vec!["abcde", "fghij"]);
+    }
+
+    #[test]
+    fn wrap_multiline_input() {
+        assert_eq!(wrap_text("abc\ndef", 10), vec!["abc", "def"]);
+    }
+
+    #[test]
+    fn wrap_empty_lines_preserved() {
+        assert_eq!(wrap_text("a\n\nb", 10), vec!["a", "", "b"]);
+    }
+
+    #[test]
+    fn wrap_cjk_double_width() {
+        // Each CJK char is width 2, so width=4 fits 2 chars
+        assert_eq!(wrap_text("あいう", 4), vec!["あい", "う"]);
+    }
+
+    #[test]
+    fn wrap_mixed_ascii_cjk() {
+        // "aあb" = 1+2+1 = 4 columns
+        assert_eq!(wrap_text("aあb", 4), vec!["aあb"]);
+        assert_eq!(wrap_text("aあb", 3), vec!["aあ", "b"]);
+    }
+
+    #[test]
+    fn wrap_trailing_spaces_trimmed() {
+        // "hello world" with width=6: breaks after "hello " -> "hello" (trimmed), "world"
+        assert_eq!(wrap_text("hello world", 6), vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn wrap_single_wide_char_exceeds_width() {
+        // width=1, CJK char is width 2, should still advance (no infinite loop)
+        let result = wrap_text("あ", 1);
+        assert_eq!(result, vec!["あ"]);
+    }
+}
+
 pub fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
 

@@ -169,6 +169,68 @@ pub fn list_panes(binary: &str) -> Result<Vec<PaneInfo>, CcmError> {
     Ok(panes)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pane_info_deserialize() {
+        let json = r#"{
+            "window_id": 0,
+            "tab_id": 1,
+            "pane_id": 2,
+            "title": "zsh",
+            "cwd": "/home/user",
+            "is_active": true
+        }"#;
+        let info: PaneInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.pane_id, 2);
+        assert_eq!(info.title, "zsh");
+        assert!(info.is_active);
+    }
+
+    #[test]
+    fn pane_info_array_deserialize() {
+        let json = r#"[
+            {"window_id":0,"tab_id":1,"pane_id":2,"title":"a","cwd":"/","is_active":true},
+            {"window_id":0,"tab_id":1,"pane_id":3,"title":"b","cwd":"/tmp","is_active":false}
+        ]"#;
+        let panes: Vec<PaneInfo> = serde_json::from_str(json).unwrap();
+        assert_eq!(panes.len(), 2);
+        assert_eq!(panes[0].pane_id, 2);
+        assert_eq!(panes[1].pane_id, 3);
+    }
+
+    #[test]
+    fn pane_info_extra_fields_ignored() {
+        let json = r#"{
+            "window_id": 0,
+            "tab_id": 1,
+            "pane_id": 2,
+            "title": "zsh",
+            "cwd": "/",
+            "is_active": false,
+            "unknown_field": "ignored",
+            "another": 42
+        }"#;
+        let info: PaneInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.pane_id, 2);
+    }
+
+    #[test]
+    fn pane_info_missing_field_errors() {
+        let json = r#"{
+            "window_id": 0,
+            "tab_id": 1,
+            "title": "zsh",
+            "cwd": "/",
+            "is_active": false
+        }"#;
+        let result = serde_json::from_str::<PaneInfo>(json);
+        assert!(result.is_err());
+    }
+}
+
 /// Send text to a pane (with --no-paste to avoid bracketed paste).
 pub fn send_text(binary: &str, pane_id: u64, text: &str) -> Result<(), CcmError> {
     let output = Command::new(binary)

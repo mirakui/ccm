@@ -71,4 +71,17 @@ mod tests {
         assert_eq!(result.worktree_path, "/tmp/repo-abc123");
         assert_eq!(result.branch, "gj/main-abc123");
     }
+
+    #[test]
+    fn parse_new_output_missing_field() {
+        let json = r#"{"worktree_path":"/tmp/repo"}"#;
+        let result = parse_new_output(json.as_bytes());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_new_output_invalid_json() {
+        let result = parse_new_output(b"not json");
+        assert!(result.is_err());
+    }
 }

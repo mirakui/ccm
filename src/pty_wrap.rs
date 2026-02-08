@@ -548,6 +548,44 @@ pub fn run_wrap(session_name: &str, command: &[String], prompt_file: Option<&str
 mod tests {
     use super::*;
 
+    // ---------------------------------------------------------------
+    // shell_join tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn shell_join_simple() {
+        let args: Vec<String> = vec!["cmd".into(), "--flag".into(), "val".into()];
+        assert_eq!(shell_join(&args), "cmd --flag val");
+    }
+
+    #[test]
+    fn shell_join_empty_arg() {
+        let args: Vec<String> = vec!["cmd".into(), "".into(), "val".into()];
+        assert_eq!(shell_join(&args), "cmd '' val");
+    }
+
+    #[test]
+    fn shell_join_special_chars() {
+        let args: Vec<String> = vec!["echo".into(), "hello world".into()];
+        assert_eq!(shell_join(&args), "echo 'hello world'");
+    }
+
+    #[test]
+    fn shell_join_single_quote_in_arg() {
+        let args: Vec<String> = vec!["echo".into(), "it's".into()];
+        assert_eq!(shell_join(&args), r"echo 'it'\''s'");
+    }
+
+    #[test]
+    fn shell_join_safe_chars_unquoted() {
+        let args: Vec<String> = vec!["cmd".into(), "-_./:=abc123".into()];
+        assert_eq!(shell_join(&args), "cmd -_./:=abc123");
+    }
+
+    // ---------------------------------------------------------------
+    // OscScanner tests
+    // ---------------------------------------------------------------
+
     #[test]
     fn test_osc0_bel_terminator() {
         let mut scanner = OscScanner::new();

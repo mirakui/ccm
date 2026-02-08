@@ -55,7 +55,7 @@ impl App {
         }
     }
 
-    fn apply_state(&mut self, state: State) {
+    pub(crate) fn apply_state(&mut self, state: State) {
         if state.version == self.last_version && !self.sessions.is_empty() {
             return;
         }
@@ -321,5 +321,249 @@ impl App {
                 return;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    impl App {
+        fn new_for_test() -> Self {
+            Self {
+                sessions: Vec::new(),
+                active_session: None,
+                selected_index: 0,
+                should_quit: false,
+                confirm_action: None,
+                last_version: 0,
+                own_session: "test-watcher".to_string(),
+                status_message: None,
+                pane_titles: HashMap::new(),
+                wezterm_binary: "wezterm".to_string(),
+                manual_navigation: false,
+            }
+        }
+    }
+
+    fn sample_session(name: &str, claude_pane_id: u64) -> Session {
+        Session {
+            name: name.to_string(),
+            tab_id: 100,
+            watcher_pane_id: 200,
+            claude_pane_id,
+            shell_pane_id: 400,
+            cwd: "/tmp".to_string(),
+            created_at: Utc::now(),
+            claude_status: None,
+        }
+    }
+
+    fn state_with_sessions(names: &[&str]) -> State {
+        let sessions: Vec<Session> = names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| sample_session(name, 300 + i as u64))
+            .collect();
+        State {
+            sessions,
+            active_session: None,
+            version: 1,
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // move_down / move_up
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn move_down_increments() {
+        let mut app = App::new_for_test();
+        app.apply_state(state_with_sessions(&["a", "b", "c"]));
+        app.selected_index = 0;
+        app.move_down();
+        assert_eq!(app.selected_index, 1);
+    }
+
+    #[test]
+    fn move_down_wraps() {
+        let mut app = App::new_for_test();
+        app.apply_state(state_with_sessions(&["a", "b", "c"]));
+        app.selected_index = 2;
+        app.move_down();
+        assert_eq!(app.selected_index, 0);
+    }
+
+    #[test]
+    fn move_down_empty_noop() {
+        let mut app = App::new_for_test();
+        app.move_down();
+        assert_eq!(app.selected_index, 0);
+    }
+
+    #[test]
+    fn move_up_decrements() {
+        let mut app = App::new_for_test();
+        app.apply_state(state_with_sessions(&["a", "b", "c"]));
+        app.selected_index = 2;
+        app.move_up();
+        assert_eq!(app.selected_index, 1);
+    }
+
+    #[test]
+    fn move_up_wraps() {
+        let mut app = App::new_for_test();
+        app.apply_state(state_with_sessions(&["a", "b", "c"]));
+        app.selected_index = 0;
+        app.move_up();
+        assert_eq!(app.selected_index, 2);
+    }
+
+    #[test]
+    fn move_up_empty_noop() {
+        let mut app = App::new_for_test();
+        app.move_up();
+        assert_eq!(app.selected_index, 0);
+    }
+
+    #[test]
+    fn move_sets_manual_navigation() {
+        let mut app = App::new_for_test();
+        app.apply_state(state_with_sessions(&["a", "b"]));
+        assert!(!app.manual_navigation);
+        app.move_down();
+        assert!(app.manual_navigation);
+    }
+
+    // ---------------------------------------------------------------
+    // request_close / confirm
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn request_close_sets_confirm() {
+        let mut app = App::new_for_test();
+        app.apply_state(state_with_sessions(&["sess1"]));
+        app.request_close();
+        assert!(matches!(app.confirm_action, Some(ConfirmAction::Close(ref n)) if n == "sess1"));
+    }
+
+    #[test]
+    fn request_close_empty_noop() {
+        let mut app = App::new_for_test();
+        app.request_close();
+        assert!(app.confirm_action.is_none());
+    }
+
+    #[test]
+    fn request_close_with_merge() {
+        let mut app = App::new_for_test();
+        app.apply_state(state_with_sessions(&["sess1"]));
+        app.request_close_with_merge();
+        assert!(
+            matches!(app.confirm_action, Some(ConfirmAction::CloseWithMerge(ref n)) if n == "sess1")
+        );
+    }
+
+    #[test]
+    fn confirm_no_clears() {
+        let mut app = App::new_for_test();
+        app.apply_state(state_with_sessions(&["sess1"]));
+        app.request_close();
+        assert!(app.confirm_action.is_some());
+        app.confirm_action_no();
+        assert!(app.confirm_action.is_none());
+    }
+
+    // ---------------------------------------------------------------
+    // apply_state
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn apply_state_updates() {
+        let mut app = App::new_for_test();
+        let mut state = state_with_sessions(&["a", "b"]);
+        state.active_session = Some("b".to_string());
+        state.version = 5;
+        app.apply_state(state);
+        assert_eq!(app.sessions.len(), 2);
+        assert_eq!(app.active_session, Some("b".to_string()));
+        assert_eq!(app.last_version, 5);
+    }
+
+    #[test]
+    fn apply_state_skips_same_version() {
+        let mut app = App::new_for_test();
+        let state = state_with_sessions(&["a"]);
+        app.apply_state(state);
+        assert_eq!(app.last_version, 1);
+
+        // Second apply with same version should be skipped (sessions not empty)
+        let mut state2 = state_with_sessions(&["a", "b"]);
+        state2.version = 1;
+        app.apply_state(state2);
+        // sessions should still be 1 (skipped)
+        assert_eq!(app.sessions.len(), 1);
+    }
+
+    #[test]
+    fn apply_state_syncs_selected() {
+        let mut app = App::new_for_test();
+        let mut state = state_with_sessions(&["a", "b", "c"]);
+        state.active_session = Some("c".to_string());
+        state.version = 1;
+        app.apply_state(state);
+        // manual_navigation is false, so should sync to "c" at index 2
+        assert_eq!(app.selected_index, 2);
+    }
+
+    #[test]
+    fn apply_state_clamps_index() {
+        let mut app = App::new_for_test();
+        let state = state_with_sessions(&["a", "b", "c"]);
+        app.apply_state(state);
+        app.selected_index = 2;
+
+        // Shrink sessions
+        let mut state2 = state_with_sessions(&["a"]);
+        state2.version = 2;
+        app.manual_navigation = true; // prevent sync to active
+        app.apply_state(state2);
+        assert_eq!(app.selected_index, 0);
+    }
+
+    #[test]
+    fn apply_state_claude_status_to_pane_titles() {
+        let mut app = App::new_for_test();
+        let mut state = state_with_sessions(&["a"]);
+        state.sessions[0].claude_status = Some("thinking...".to_string());
+        state.version = 1;
+        app.apply_state(state);
+        let pane_id = app.sessions[0].claude_pane_id;
+        assert_eq!(app.pane_titles.get(&pane_id).unwrap(), "thinking...");
+    }
+
+    #[test]
+    fn manual_nav_prevents_sync() {
+        let mut app = App::new_for_test();
+        let mut state = state_with_sessions(&["a", "b", "c"]);
+        state.active_session = Some("a".to_string());
+        state.version = 1;
+        app.apply_state(state);
+        assert_eq!(app.selected_index, 0);
+
+        // Manual navigation: move to index 2
+        app.move_down();
+        app.move_down();
+        assert_eq!(app.selected_index, 2);
+        assert!(app.manual_navigation);
+
+        // apply_state with new version but active still "a"
+        let mut state2 = state_with_sessions(&["a", "b", "c"]);
+        state2.active_session = Some("a".to_string());
+        state2.version = 2;
+        app.apply_state(state2);
+        // should stay at 2 because manual_navigation is true
+        assert_eq!(app.selected_index, 2);
     }
 }
