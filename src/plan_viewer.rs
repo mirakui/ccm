@@ -234,20 +234,20 @@ fn render(
 
     // Header with scroll position
     if total == 0 {
-        writeln!(stdout, "\x1b[1;36m=== {} === [empty]\x1b[0m", filename)?;
+        write!(stdout, "\x1b[1;36m=== {} === [empty]\x1b[0m\r\n", filename)?;
     } else {
-        writeln!(
+        write!(
             stdout,
-            "\x1b[1;36m=== {} === [L{}-L{}/{}]\x1b[0m",
+            "\x1b[1;36m=== {} === [L{}-L{}/{}]\x1b[0m\r\n",
             filename, start_display, end_display, total
         )?;
     }
     // Separator line
-    writeln!(stdout)?;
+    write!(stdout, "\r\n")?;
 
     // Content
     for line in lines.iter().skip(offset).take(content_height) {
-        writeln!(stdout, "{}", line)?;
+        write!(stdout, "{}\r\n", line)?;
     }
     stdout.flush()?;
 
@@ -282,11 +282,11 @@ fn display_waiting(plans_dir: &Path) -> anyhow::Result<()> {
         cursor::MoveTo(0, 0)
     )?;
 
-    writeln!(stdout, "\x1b[2mWaiting for plans...\x1b[0m")?;
-    writeln!(stdout)?;
-    writeln!(
+    write!(stdout, "\x1b[2mWaiting for plans...\x1b[0m\r\n")?;
+    write!(stdout, "\r\n")?;
+    write!(
         stdout,
-        "\x1b[2mExpecting .md files in:\n  {}\x1b[0m",
+        "\x1b[2mExpecting .md files in:\r\n  {}\x1b[0m\r\n",
         plans_dir.display()
     )?;
     stdout.flush()?;
