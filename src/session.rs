@@ -23,6 +23,7 @@ impl Session {
             s.watcher_pane_id == pane_id
                 || s.claude_pane_id == pane_id
                 || s.shell_pane_id == pane_id
+                || s.plans_pane_id == Some(pane_id)
         })
     }
 }
@@ -129,6 +130,23 @@ mod tests {
         let found = Session::find_by_pane_id(&sessions, 4);
         assert!(found.is_some());
         assert_eq!(found.unwrap().name, "test");
+    }
+
+    #[test]
+    fn find_by_pane_id_matches_plans() {
+        let mut session = sample_session();
+        session.plans_pane_id = Some(5);
+        let sessions = vec![session];
+        let found = Session::find_by_pane_id(&sessions, 5);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "test");
+    }
+
+    #[test]
+    fn find_by_pane_id_no_match_plans_none() {
+        let sessions = vec![sample_session()]; // plans_pane_id is None
+        let found = Session::find_by_pane_id(&sessions, 5);
+        assert!(found.is_none());
     }
 
     #[test]

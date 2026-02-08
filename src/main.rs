@@ -474,6 +474,7 @@ fn cmd_reset_layout(config: &Config) -> Result<()> {
     let claude_pane_id = session.claude_pane_id;
     let watcher_pane_id = session.watcher_pane_id;
     let shell_pane_id = session.shell_pane_id;
+    let session_cwd = session.cwd.clone();
 
     // 3. Verify claude pane is alive (it's the layout anchor)
     let live_panes = wezterm::list_panes(binary)?;
@@ -548,6 +549,21 @@ fn cmd_reset_layout(config: &Config) -> Result<()> {
     )
     .context("failed to create shell pane")?;
 
+    // 6b. Split right for plans viewer (best-effort: failure doesn't abort reset)
+    let new_plans = match wezterm::split_pane(
+        binary,
+        claude_pane_id,
+        wezterm::SplitDirection::Right,
+        config.layout.plans_width,
+        Some(&[&ccm_str, "plan-viewer", "--cwd", &session_cwd]),
+    ) {
+        Ok(id) => Some(id),
+        Err(e) => {
+            eprintln!("Warning: failed to create plans viewer pane: {e}");
+            None
+        }
+    };
+
     // 7. Set tab title
     wezterm::set_tab_title(binary, new_watcher, &session_name)
         .context("failed to set tab title")?;
@@ -561,6 +577,7 @@ fn cmd_reset_layout(config: &Config) -> Result<()> {
             .ok_or_else(|| CcmError::SessionNotFound(session_name.clone()))?;
         s.watcher_pane_id = new_watcher;
         s.shell_pane_id = new_shell;
+        s.plans_pane_id = new_plans;
         Ok(())
     })?;
 
