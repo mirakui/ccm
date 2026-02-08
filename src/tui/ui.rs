@@ -208,14 +208,22 @@ pub fn draw(f: &mut Frame, app: &App) {
         for (i, session) in app.sessions.iter().enumerate() {
             let is_selected = i == app.selected_index;
             let is_active = app.active_session.as_deref() == Some(&session.name);
+            let is_own = session.name == app.own_session;
 
             let prefix = if is_selected { " > " } else { "   " };
-            let suffix = if is_active { "  ●" } else { "" };
+            let suffix = match (is_active, is_own) {
+                (true, true) => "  ● ◆",
+                (true, false) => "  ●",
+                (false, true) => "  ◆",
+                (false, false) => "",
+            };
 
             let style = if is_selected {
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD)
+            } else if is_own {
+                Style::default().fg(Color::Cyan)
             } else if is_active {
                 Style::default().fg(Color::Green)
             } else {
