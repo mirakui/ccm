@@ -370,18 +370,19 @@ fn generate_session_name_from_plan(content: &str) -> String {
 }
 
 fn save_plan_to_worktree(worktree_path: &str, content: &str) -> Result<()> {
-    let cctmp_dir = PathBuf::from(worktree_path).join(".cctmp");
+    let ccm_dir = PathBuf::from(worktree_path).join(".ccm");
+    let plans_dir = ccm_dir.join("plans");
 
-    fs::create_dir_all(&cctmp_dir).context("failed to create .cctmp directory")?;
+    fs::create_dir_all(&plans_dir).context("failed to create .ccm/plans directory")?;
 
-    // Ensure .cctmp contents are gitignored
-    let gitignore = cctmp_dir.join(".gitignore");
+    // Ensure .ccm contents are gitignored
+    let gitignore = ccm_dir.join(".gitignore");
     if !gitignore.exists() {
         fs::write(&gitignore, "*\n").ok();
     }
 
-    let plan_file = cctmp_dir.join("plan.md");
-    fs::write(&plan_file, content).context("failed to write plan.md")?;
+    let plan_file = plans_dir.join("init.md");
+    fs::write(&plan_file, content).context("failed to write init.md")?;
 
     Ok(())
 }
@@ -407,11 +408,11 @@ fn cmd_plan(config: &Config, cwd: Option<String>) -> Result<()> {
     let ccm_str = ccm_path.to_string_lossy().to_string();
     let quoted_session = info.session_name.replace('\'', "'\\''");
     let plan_path = PathBuf::from(&info.worktree_path)
-        .join(".cctmp/plan.md");
+        .join(".ccm/plans/init.md");
     let plan_path_str = plan_path.to_string_lossy();
     let quoted_plan_path = plan_path_str.replace('\'', "'\\''");
     let claude_cmd = format!(
-        "{} wrap --session '{}' --prompt-file '{}' -- {} --permission-mode=plan\n",
+        "{} wrap --session '{}' --prompt-file '{}' -- {} --settings '{{\"plansDirectory\": \".ccm/plans/\"}}' --permission-mode=plan\n",
         ccm_str,
         quoted_session,
         quoted_plan_path,
@@ -420,7 +421,7 @@ fn cmd_plan(config: &Config, cwd: Option<String>) -> Result<()> {
     wezterm::send_text(&config.wezterm.binary, info.claude_pane_id, &claude_cmd)
         .context("failed to send claude plan command to pane")?;
 
-    println!("Plan saved to .cctmp/plan.md");
+    println!("Plan saved to .ccm/plans/init.md");
 
     Ok(())
 }
